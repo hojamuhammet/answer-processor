@@ -4,6 +4,7 @@ import (
 	"answers-processor/pkg/logger"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -74,13 +75,17 @@ func GetAccountAndQuestions(db *sql.DB, shortNumber string, currentDateTime time
 	return title, questions, questionIDs, nil
 }
 
-func GetQuestionAnswer(db *sql.DB, questionID int64) (string, error) {
-	var answer string
-	err := db.QueryRow("SELECT answer FROM questions WHERE id = ?", questionID).Scan(&answer)
+func GetQuestionAnswers(db *sql.DB, questionID int64) ([]string, error) {
+	var answers string
+	err := db.QueryRow("SELECT answer FROM questions WHERE id = ?", questionID).Scan(&answers)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return answer, nil
+	answerList := strings.Split(answers, ",")
+	for i := range answerList {
+		answerList[i] = strings.ToLower(strings.TrimSpace(answerList[i]))
+	}
+	return answerList, nil
 }
 
 func GetQuestionScore(db *sql.DB, questionID int64) (int, error) {
@@ -92,10 +97,21 @@ func GetQuestionScore(db *sql.DB, questionID int64) (int, error) {
 	return score, nil
 }
 
-func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, accepted bool) error {
+func HasClientAnsweredCorrectly(db *sql.DB, questionID, clientID int64) bool {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM answers WHERE question_id = ? AND client_id = ? AND status = TRUE", questionID, clientID).Scan(&count)
+	if err != nil {
+		loggers.ErrorLogger.Error("Failed to check if client has answered correctly", "error", err)
+		return false
+	}
+	return count > 0
+}
+
+func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, isCorrect bool) error {
+	msg = strings.ToLower(strings.TrimSpace(msg))
 	_, err := db.Exec(
-		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, accepted) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?)",
-		questionID, msg, dt, clientID, score, questionID, accepted,
+		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, status) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?)",
+		questionID, msg, dt, clientID, score, questionID, isCorrect,
 	)
 	return err
 }

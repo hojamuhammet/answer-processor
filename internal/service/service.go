@@ -42,13 +42,13 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 	logInstance.InfoLogger.Info("Quiz found", "title", title)
 	for i, question := range questions {
 		logInstance.InfoLogger.Info("Question found", "question", question)
-		correctAnswer, err := repository.GetQuestionAnswer(db, questionIDs[i])
+		correctAnswers, err := repository.GetQuestionAnswers(db, questionIDs[i])
 		if err != nil {
-			logInstance.ErrorLogger.Error("Failed to get question answer", "error", err)
+			logInstance.ErrorLogger.Error("Failed to get question answers", "error", err)
 			continue
 		}
 
-		isCorrect := compareAnswers(correctAnswer, text)
+		isCorrect := compareAnswers(correctAnswers, text)
 		score := 0
 		if isCorrect {
 			score, err = repository.GetQuestionScore(db, questionIDs[i])
@@ -56,6 +56,12 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
 			}
+		}
+
+		// Check if the client has already answered the question correctly
+		if repository.HasClientAnsweredCorrectly(db, questionIDs[i], clientID) {
+			logInstance.InfoLogger.Info("Client has already answered correctly", "client_id", clientID, "question_id", questionIDs[i])
+			continue
 		}
 
 		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, isCorrect)
@@ -67,10 +73,14 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 	}
 }
 
-func compareAnswers(correctAnswer, userAnswer string) bool {
-	correctAnswer = strings.ToLower(strings.TrimSpace(correctAnswer))
+func compareAnswers(correctAnswers []string, userAnswer string) bool {
 	userAnswer = strings.ToLower(strings.TrimSpace(userAnswer))
-	return correctAnswer == userAnswer
+	for _, correctAnswer := range correctAnswers {
+		if strings.ToLower(strings.TrimSpace(correctAnswer)) == userAnswer {
+			return true
+		}
+	}
+	return false
 }
 
 func parseMessageParts(message string) map[string]string {
