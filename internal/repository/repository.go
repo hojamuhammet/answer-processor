@@ -83,9 +83,13 @@ func GetQuestionAnswers(db *sql.DB, questionID int64) ([]string, error) {
 	}
 	answerList := strings.Split(answers, ",")
 	for i := range answerList {
-		answerList[i] = strings.ToLower(strings.TrimSpace(answerList[i]))
+		answerList[i] = sanitizeAnswer(answerList[i])
 	}
 	return answerList, nil
+}
+
+func sanitizeAnswer(answer string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(answer), " ", ""))
 }
 
 func GetQuestionScore(db *sql.DB, questionID int64) (int, error) {
@@ -108,7 +112,7 @@ func HasClientAnsweredCorrectly(db *sql.DB, questionID, clientID int64) bool {
 }
 
 func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, isCorrect bool) error {
-	msg = strings.ToLower(strings.TrimSpace(msg))
+	msg = sanitizeAnswer(msg)
 	_, err := db.Exec(
 		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, status) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?)",
 		questionID, msg, dt, clientID, score, questionID, isCorrect,

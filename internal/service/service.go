@@ -74,13 +74,17 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
-	userAnswer = strings.ToLower(strings.TrimSpace(userAnswer))
+	userAnswer = sanitizeAnswer(userAnswer)
 	for _, correctAnswer := range correctAnswers {
-		if strings.ToLower(strings.TrimSpace(correctAnswer)) == userAnswer {
+		if sanitizeAnswer(correctAnswer) == userAnswer {
 			return true
 		}
 	}
 	return false
+}
+
+func sanitizeAnswer(answer string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(answer), " ", ""))
 }
 
 func parseMessageParts(message string) map[string]string {
