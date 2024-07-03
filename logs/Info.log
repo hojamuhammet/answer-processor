@@ -1,0 +1,7 @@
+time=2024-07-03T12:16:43.817+05:00 level=INFO msg="Received a message" message="src=99364998173, dst=0546, txt=Гапылык.Мургап этрабы Багт Какамырат Кoммиевлер., date=2024-07-03T12:16:23+05:00"
+time=2024-07-03T12:16:43.819+05:00 level=INFO msg="Inserted new client" phone=99364998173
+time=2024-07-03T12:16:56.839+05:00 level=INFO msg="Received a message" message="src=99362008971, dst=0503, txt=Madrid, date=2024-07-03T12:16:57+05:00"
+time=2024-07-03T12:16:56.858+05:00 level=INFO msg="Inserted new client" phone=99362008971
+time=2024-07-03T12:16:56.859+05:00 level=INFO msg="Quiz found" title="Test Quiz for 0503"
+time=2024-07-03T12:16:56.859+05:00 level=INFO msg="Question found" question="What is the capital of Spain?"
+time=2024-07-03T12:16:56.869+05:00 level=INFO msg="Answer inserted" question_id=10 is_correct=true score=5
