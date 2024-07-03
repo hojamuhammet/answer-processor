@@ -111,11 +111,29 @@ func HasClientAnsweredCorrectly(db *sql.DB, questionID, clientID int64) bool {
 	return count > 0
 }
 
-func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, isCorrect bool) error {
+func GetNextSerialNumber(db *sql.DB, questionID int64) (int, error) {
+	var serialNumber int
+	err := db.QueryRow("SELECT IFNULL(MAX(serial_number), 0) + 1 FROM answers WHERE question_id = ?", questionID).Scan(&serialNumber)
+	if err != nil {
+		return 0, err
+	}
+	return serialNumber, nil
+}
+
+func GetNextSerialNumberForCorrect(db *sql.DB, questionID int64) (int, error) {
+	var serialNumberForCorrect int
+	err := db.QueryRow("SELECT IFNULL(MAX(serial_number_for_correct), 0) + 1 FROM answers WHERE question_id = ? AND status = TRUE", questionID).Scan(&serialNumberForCorrect)
+	if err != nil {
+		return 0, err
+	}
+	return serialNumberForCorrect, nil
+}
+
+func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, isCorrect bool, serialNumber int, serialNumberForCorrect int) error {
 	msg = sanitizeAnswer(msg)
 	_, err := db.Exec(
-		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, status) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?)",
-		questionID, msg, dt, clientID, score, questionID, isCorrect,
+		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, status, serial_number, serial_number_for_correct) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?, ?, ?)",
+		questionID, msg, dt, clientID, score, questionID, isCorrect, serialNumber, serialNumberForCorrect,
 	)
 	return err
 }

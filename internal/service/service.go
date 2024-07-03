@@ -64,12 +64,27 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 			continue
 		}
 
-		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, isCorrect)
+		serialNumber, err := repository.GetNextSerialNumber(db, questionIDs[i])
+		if err != nil {
+			logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
+			continue
+		}
+
+		serialNumberForCorrect := 0
+		if isCorrect {
+			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(db, questionIDs[i])
+			if err != nil {
+				logInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
+				continue
+			}
+		}
+
+		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, isCorrect, serialNumber, serialNumberForCorrect)
 		if err != nil {
 			logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
 		}
-		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionIDs[i], "is_correct", isCorrect, "score", score)
+		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionIDs[i], "is_correct", isCorrect, "score", score, "serial_number", serialNumber, "serial_number_for_correct", serialNumberForCorrect)
 	}
 }
 
