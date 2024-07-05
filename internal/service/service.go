@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+const customDateFormat = "2006-01-02T15:04:05"
+
 func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 	message := string(body)
 	parts := parseMessageParts(message)
@@ -21,7 +23,7 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 	text := parts["txt"]
 	date := parts["date"]
 
-	parsedDate, err := time.Parse(time.RFC3339, date)
+	parsedDate, err := time.Parse(customDateFormat, date)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to parse date", "date", date, "error", err)
 		return
