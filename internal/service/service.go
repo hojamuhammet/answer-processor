@@ -35,6 +35,23 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 		return
 	}
 
+	accountType, err := repository.GetAccountType(db, destination)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to get account type", "error", err)
+		return
+	}
+
+	switch accountType {
+	case "quiz":
+		processQuiz(db, clientID, destination, text, parsedDate, logInstance)
+	case "voting":
+		processVoting(clientID, destination, parsedDate, logInstance)
+	default:
+		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
+	}
+}
+
+func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers) {
 	title, questions, questionIDs, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find quiz and questions by short number and date", "error", err)
@@ -87,6 +104,12 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 		}
 		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionIDs[i], "is_correct", isCorrect, "score", score, "serial_number", serialNumber, "serial_number_for_correct", serialNumberForCorrect)
 	}
+}
+
+func processVoting(clientID int64, destination string, parsedDate time.Time, logInstance *logger.Loggers) {
+	logInstance.InfoLogger.Info("Processing voting logic", "client_id", clientID, "destination", destination, "date", parsedDate)
+	// Placeholder for voting logic
+	// Implement the actual voting logic here
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
