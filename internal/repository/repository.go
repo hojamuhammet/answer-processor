@@ -101,11 +101,11 @@ func GetQuestionScore(db *sql.DB, questionID int64) (int, error) {
 	return score, nil
 }
 
-func HasClientAnsweredCorrectly(db *sql.DB, questionID, clientID int64) bool {
+func HasClientScored(db *sql.DB, questionID, clientID int64) bool {
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM answers WHERE question_id = ? AND client_id = ? AND status = TRUE", questionID, clientID).Scan(&count)
+	err := db.QueryRow("SELECT COUNT(*) FROM answers WHERE question_id = ? AND client_id = ? AND score > 0", questionID, clientID).Scan(&count)
 	if err != nil {
-		loggers.ErrorLogger.Error("Failed to check if client has answered correctly", "error", err)
+		loggers.ErrorLogger.Error("Failed to check if client has scored", "error", err)
 		return false
 	}
 	return count > 0
@@ -122,18 +122,18 @@ func GetNextSerialNumber(db *sql.DB, questionID int64) (int, error) {
 
 func GetNextSerialNumberForCorrect(db *sql.DB, questionID int64) (int, error) {
 	var serialNumberForCorrect int
-	err := db.QueryRow("SELECT IFNULL(MAX(serial_number_for_correct), 0) + 1 FROM answers WHERE question_id = ? AND status = TRUE", questionID).Scan(&serialNumberForCorrect)
+	err := db.QueryRow("SELECT IFNULL(MAX(serial_number_for_correct), 0) + 1 FROM answers WHERE question_id = ? AND score > 0", questionID).Scan(&serialNumberForCorrect)
 	if err != nil {
 		return 0, err
 	}
 	return serialNumberForCorrect, nil
 }
 
-func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, isCorrect bool, serialNumber int, serialNumberForCorrect int) error {
+func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, serialNumber int, serialNumberForCorrect int) error {
 	msg = sanitizeAnswer(msg)
 	_, err := db.Exec(
-		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, status, serial_number, serial_number_for_correct) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?, ?, ?)",
-		questionID, msg, dt, clientID, score, questionID, isCorrect, serialNumber, serialNumberForCorrect,
+		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, serial_number, serial_number_for_correct) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?, ?)",
+		questionID, msg, dt, clientID, score, questionID, serialNumber, serialNumberForCorrect,
 	)
 	return err
 }

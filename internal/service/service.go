@@ -60,9 +60,8 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 			}
 		}
 
-		// Check if the client has already answered the question correctly
-		if repository.HasClientAnsweredCorrectly(db, questionIDs[i], clientID) {
-			logInstance.InfoLogger.Info("Client has already answered correctly", "client_id", clientID, "question_id", questionIDs[i])
+		if repository.HasClientScored(db, questionIDs[i], clientID) {
+			logInstance.InfoLogger.Info("Client has already answered with a score", "client_id", clientID, "question_id", questionIDs[i])
 			continue
 		}
 
@@ -81,7 +80,7 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 			}
 		}
 
-		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, isCorrect, serialNumber, serialNumberForCorrect)
+		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
 		if err != nil {
 			logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
