@@ -45,7 +45,7 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 	case "quiz":
 		processQuiz(db, clientID, destination, text, parsedDate, logInstance)
 	case "voting":
-		processVoting(clientID, destination, parsedDate, logInstance)
+		processVoting(db, clientID, destination, text, parsedDate, logInstance)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -106,10 +106,37 @@ func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDat
 	}
 }
 
-func processVoting(clientID int64, destination string, parsedDate time.Time, logInstance *logger.Loggers) {
-	logInstance.InfoLogger.Info("Processing voting logic", "client_id", clientID, "destination", destination, "date", parsedDate)
-	// Placeholder for voting logic
-	// Implement the actual voting logic here
+func processVoting(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers) {
+	votingID, err := repository.GetVotingByShortNumber(db, destination, parsedDate)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
+		return
+	}
+
+	votingItemID, err := repository.GetVotingItemIDByVoteCode(db, votingID, text)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to find voting item by vote code", "vote_code", text, "error", err)
+		return
+	}
+
+	if repository.HasClientVoted(db, votingID, clientID) {
+		logInstance.InfoLogger.Info("Client has already voted", "client_id", clientID, "voting_id", votingID)
+		return
+	}
+
+	err = repository.InsertVotingMessage(db, votingID, votingItemID, text, parsedDate, clientID)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to insert voting message", "error", err)
+		return
+	}
+
+	err = repository.UpdateVoteCount(db, votingItemID)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to update vote count", "error", err)
+		return
+	}
+
+	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
