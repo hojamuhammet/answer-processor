@@ -10,6 +10,7 @@ type Config struct {
 	Env      string   `yaml:"env"`
 	Database Database `yaml:"database"`
 	RabbitMQ RabbitMQ `yaml:"rabbitmq"`
+	SMPP     SMPP     `yaml:"smpp"`
 }
 
 type Database struct {
@@ -18,6 +19,12 @@ type Database struct {
 
 type RabbitMQ struct {
 	URL string `yaml:"url"`
+}
+
+type SMPP struct {
+	Addr string `yaml:"address"`
+	User string `yaml:"user"`
+	Pass string `yaml:"password"`
 }
 
 func LoadConfig() *Config {

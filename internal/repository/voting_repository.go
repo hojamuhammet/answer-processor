@@ -6,6 +6,20 @@ import (
 	"time"
 )
 
+func GetVotingItemTitle(db *sql.DB, votingItemID int64) (string, error) {
+	var title string
+	query := `
+		SELECT title
+		FROM voting_items
+		WHERE id = ?
+	`
+	err := db.QueryRow(query, votingItemID).Scan(&title)
+	if err != nil {
+		return "", errors.New("voting item title not found")
+	}
+	return title, nil
+}
+
 func GetVotingByShortNumber(db *sql.DB, shortNumber string, currentDateTime time.Time) (int64, error) {
 	var votingID int64
 	query := `
