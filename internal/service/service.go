@@ -10,32 +10,28 @@ import (
 
 const customDateFormat = "2006-01-02T15:04:05"
 
-func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
-	message := string(body)
-	parts := parseMessageParts(message)
-	if len(parts) < 4 { // Ensure there are at least 4 parts: src, dst, txt, date
-		logInstance.ErrorLogger.Error("Failed to parse message: input does not match format", "message", message)
-		return
-	}
+type SMSMessage struct {
+	Source      string `json:"src"`
+	Destination string `json:"dst"`
+	Text        string `json:"txt"`
+	Date        string `json:"date"`
+	Parts       int    `json:"parts"`
+}
 
-	source := parts["src"]
-	destination := parts["dst"]
-	text := parts["txt"]
-	date := parts["date"]
-
-	parsedDate, err := time.Parse(customDateFormat, date)
+func ProcessMessage(db *sql.DB, message SMSMessage, logInstance *logger.Loggers) {
+	parsedDate, err := time.Parse(customDateFormat, message.Date)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to parse date", "date", date, "error", err)
+		logInstance.ErrorLogger.Error("Failed to parse date", "date", message.Date, "error", err)
 		return
 	}
 
-	clientID, err := repository.InsertClientIfNotExists(db, source)
+	clientID, err := repository.InsertClientIfNotExists(db, message.Source)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to insert or find client", "error", err)
 		return
 	}
 
-	accountType, err := repository.GetAccountType(db, destination)
+	accountType, err := repository.GetAccountType(db, message.Destination)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to get account type", "error", err)
 		return
@@ -43,9 +39,9 @@ func ProcessMessage(db *sql.DB, body []byte, logInstance *logger.Loggers) {
 
 	switch accountType {
 	case "quiz":
-		processQuiz(db, clientID, destination, text, parsedDate, logInstance)
+		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
 	case "voting":
-		processVoting(db, clientID, destination, text, parsedDate, logInstance)
+		processVoting(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -151,20 +147,4 @@ func compareAnswers(correctAnswers []string, userAnswer string) bool {
 
 func sanitizeAnswer(answer string) string {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(answer), " ", ""))
-}
-
-func parseMessageParts(message string) map[string]string {
-	result := make(map[string]string)
-	parts := strings.Split(message, ", ")
-	for _, part := range parts {
-		if strings.Contains(part, "=") {
-			keyValue := strings.SplitN(part, "=", 2)
-			if len(keyValue) == 2 {
-				key := keyValue[0]
-				value := keyValue[1]
-				result[key] = value
-			}
-		}
-	}
-	return result
 }

@@ -4,6 +4,7 @@ import (
 	"answers-processor/internal/service"
 	"answers-processor/pkg/logger"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/streadway/amqp"
 )
@@ -78,7 +79,15 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, logInstance *logger.Logg
 	go func() {
 		for d := range msgs {
 			logInstance.InfoLogger.Info("Received a message", "message", string(d.Body))
-			service.ProcessMessage(db, d.Body, logInstance)
+
+			var smsMessage service.SMSMessage
+			err := json.Unmarshal(d.Body, &smsMessage)
+			if err != nil {
+				logInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
+				continue
+			}
+
+			service.ProcessMessage(db, smsMessage, logInstance)
 		}
 	}()
 
