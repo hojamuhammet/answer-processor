@@ -42,6 +42,8 @@ func ProcessMessage(db *sql.DB, message SMSMessage, logInstance *logger.Loggers)
 		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
 	case "voting":
 		processVoting(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
+	case "shopping":
+		processShopping(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -133,6 +135,28 @@ func processVoting(db *sql.DB, clientID int64, destination, text string, parsedD
 	}
 
 	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
+}
+
+func processShopping(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers) {
+	lotID, err := repository.GetLotByShortNumber(db, destination, parsedDate)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
+		return
+	}
+
+	// Validate unique code matches the message text
+	if !repository.IsValidUniqueCode(db, lotID, text) {
+		logInstance.ErrorLogger.Error("Unique code does not match the message text", "lot_id", lotID, "message_text", text)
+		return
+	}
+
+	err = repository.InsertLotSMSMessage(db, lotID, text, parsedDate, clientID)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to insert lot SMS message", "error", err)
+		return
+	}
+
+	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
