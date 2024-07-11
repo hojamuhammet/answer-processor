@@ -1,7 +1,6 @@
 package service
 
 import (
-	"answers-processor/internal/infrastructure/smpp"
 	"answers-processor/internal/repository"
 	"answers-processor/pkg/logger"
 	"database/sql"
@@ -19,7 +18,7 @@ type SMSMessage struct {
 	Parts       int    `json:"parts"`
 }
 
-func ProcessMessage(db *sql.DB, smppClient *smpp.SMPPClient, message SMSMessage, logInstance *logger.Loggers) {
+func ProcessMessage(db *sql.DB, message SMSMessage, logInstance *logger.Loggers) {
 	parsedDate, err := time.Parse(customDateFormat, message.Date)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to parse date", "date", message.Date, "error", err)
@@ -42,9 +41,9 @@ func ProcessMessage(db *sql.DB, smppClient *smpp.SMPPClient, message SMSMessage,
 	case "quiz":
 		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
 	case "voting":
-		processVoting(db, smppClient, clientID, message, parsedDate, logInstance)
+		processVoting(db, clientID, message, parsedDate, logInstance)
 	case "shopping":
-		processShopping(db, smppClient, clientID, message, parsedDate, logInstance)
+		processShopping(db, clientID, message, parsedDate, logInstance)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -105,7 +104,7 @@ func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDat
 	}
 }
 
-func processVoting(db *sql.DB, smppClient *smpp.SMPPClient, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+func processVoting(db *sql.DB, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
 	votingID, err := repository.GetVotingByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
@@ -141,18 +140,10 @@ func processVoting(db *sql.DB, smppClient *smpp.SMPPClient, clientID int64, mess
 		return
 	}
 
-	smsText := votingItemTitle + " ucin beren sesiniz kabul edildi"
-	err = smppClient.SendSMS(message.Destination, message.Source, smsText)
-	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to send SMS notification", "error", err)
-	} else {
-		logInstance.InfoLogger.Info("SMS notification sent successfully", "to", message.Source)
-	}
-
-	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
+	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID, "notification_text", votingItemTitle+" ucin beren sesiniz kabul edildi")
 }
 
-func processShopping(db *sql.DB, smppClient *smpp.SMPPClient, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+func processShopping(db *sql.DB, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
 	lotID, err := repository.GetLotByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
@@ -165,15 +156,7 @@ func processShopping(db *sql.DB, smppClient *smpp.SMPPClient, clientID int64, me
 		return
 	}
 
-	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
-
-	// Send SMS notification
-	err = smppClient.SendSMS(message.Destination, message.Source, "Shopping vote is accepted via smpp.")
-	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to send SMS notification", "error", err)
-	} else {
-		logInstance.InfoLogger.Info("SMS notification sent successfully", "to", message.Source)
-	}
+	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID, "notification_text", "Shopping vote is accepted via smpp.")
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
