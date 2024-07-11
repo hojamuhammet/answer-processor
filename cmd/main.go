@@ -2,9 +2,10 @@ package main
 
 import (
 	"answers-processor/config"
+	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/infrastructure/rabbitmq"
 	"answers-processor/internal/repository"
-	database "answers-processor/pkg/database"
+	db "answers-processor/pkg/database"
 	"answers-processor/pkg/logger"
 	"log"
 	"os"
@@ -21,12 +22,18 @@ func main() {
 
 	repository.Init(logInstance)
 
-	dbInstance, err := database.NewDatabase(cfg.Database.Addr)
+	dbInstance, err := db.NewDatabase(cfg.Database.Addr)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to connect to MySQL", "error", err)
 		os.Exit(1)
 	}
 	defer dbInstance.Close()
+
+	message_broker, err := message_broker.NewMessageBrokerClient(cfg, logInstance)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to create relay client", "error", err)
+		os.Exit(1)
+	}
 
 	rabbitMQConn, err := rabbitmq.NewConnection(cfg.RabbitMQ.URL)
 	if err != nil {
@@ -35,5 +42,5 @@ func main() {
 	}
 	defer rabbitMQConn.Close()
 
-	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, logInstance)
+	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance)
 }

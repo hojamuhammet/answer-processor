@@ -1,6 +1,7 @@
 package rabbitmq
 
 import (
+	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/service"
 	"answers-processor/pkg/logger"
 	"database/sql"
@@ -13,7 +14,7 @@ func NewConnection(url string) (*amqp.Connection, error) {
 	return amqp.Dial(url)
 }
 
-func ConsumeMessages(conn *amqp.Connection, db *sql.DB, logInstance *logger.Loggers) {
+func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers) {
 	channel, err := conn.Channel()
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to open a channel", "error", err)
@@ -87,7 +88,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, logInstance *logger.Logg
 				continue
 			}
 
-			service.ProcessMessage(db, smsMessage, logInstance)
+			service.ProcessMessage(db, messageBroker, smsMessage, logInstance)
 		}
 	}()
 
