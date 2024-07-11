@@ -42,7 +42,7 @@ func GetAccountAndQuestions(db *sql.DB, shortNumber string, currentDateTime time
 		FROM questions q
 		LEFT JOIN quizzes z ON q.quiz_id = z.id
 		LEFT JOIN accounts a ON z.account_id = a.id
-		WHERE a.short_number = ? AND q.starts_at <= ? AND q.ends_at >= ? AND q.status = 'active'
+		WHERE a.short_number = ? AND q.starts_at <= ? AND q.ends_at >= ?
 	`
 
 	rows, err := db.Query(query, shortNumber, currentDateTime, currentDateTime)
@@ -130,7 +130,6 @@ func GetNextSerialNumberForCorrect(db *sql.DB, questionID int64) (int, error) {
 }
 
 func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, clientID int64, score int, serialNumber int, serialNumberForCorrect int) error {
-	msg = sanitizeAnswer(msg)
 	_, err := db.Exec(
 		"INSERT INTO answers (question_id, msg, dt, client_id, score, quiz_id, serial_number, serial_number_for_correct) VALUES (?, ?, ?, ?, ?, (SELECT quiz_id FROM questions WHERE id = ?), ?, ?)",
 		questionID, msg, dt, clientID, score, questionID, serialNumber, serialNumberForCorrect,

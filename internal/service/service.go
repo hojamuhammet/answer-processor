@@ -135,14 +135,12 @@ func processVoting(db *sql.DB, smppClient *smpp.SMPPClient, clientID int64, mess
 		return
 	}
 
-	// Get the title of the voting item
 	votingItemTitle, err := repository.GetVotingItemTitle(db, votingItemID)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to get voting item title", "error", err)
 		return
 	}
 
-	// Send the SMS notification
 	smsText := votingItemTitle + " ucin beren sesiniz kabul edildi"
 	err = smppClient.SendSMS(message.Destination, message.Source, smsText)
 	if err != nil {
@@ -189,5 +187,5 @@ func compareAnswers(correctAnswers []string, userAnswer string) bool {
 }
 
 func sanitizeAnswer(answer string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(answer), " ", ""))
+	return strings.ToLower(strings.TrimSpace(answer))
 }
