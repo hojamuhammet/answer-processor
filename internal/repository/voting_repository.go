@@ -6,13 +6,19 @@ import (
 	"time"
 )
 
+func GetVotingLimit(db *sql.DB, votingID int64) (string, error) {
+	var voteLimit string
+	query := `SELECT vote_limit FROM votings WHERE id = ?`
+	err := db.QueryRow(query, votingID).Scan(&voteLimit)
+	if err != nil {
+		return "", err
+	}
+	return voteLimit, nil
+}
+
 func GetVotingItemTitle(db *sql.DB, votingItemID int64) (string, error) {
 	var title string
-	query := `
-		SELECT title
-		FROM voting_items
-		WHERE id = ?
-	`
+	query := `SELECT title FROM voting_items WHERE id = ?`
 	err := db.QueryRow(query, votingItemID).Scan(&title)
 	if err != nil {
 		return "", errors.New("voting item title not found")
@@ -23,11 +29,11 @@ func GetVotingItemTitle(db *sql.DB, votingItemID int64) (string, error) {
 func GetVotingByShortNumber(db *sql.DB, shortNumber string, currentDateTime time.Time) (int64, error) {
 	var votingID int64
 	query := `
-		SELECT v.id
-		FROM votings v
-		JOIN accounts a ON v.account_id = a.id
-		WHERE a.short_number = ? AND v.starts_at <= ? AND v.ends_at >= ?
-	`
+        SELECT v.id
+        FROM votings v
+        JOIN accounts a ON v.account_id = a.id
+        WHERE a.short_number = ? AND v.starts_at <= ? AND v.ends_at >= ?
+    `
 	err := db.QueryRow(query, shortNumber, currentDateTime, currentDateTime).Scan(&votingID)
 	if err != nil {
 		return 0, err
@@ -37,11 +43,7 @@ func GetVotingByShortNumber(db *sql.DB, shortNumber string, currentDateTime time
 
 func GetVotingItemIDByVoteCode(db *sql.DB, votingID int64, voteCode string) (int64, error) {
 	var votingItemID int64
-	query := `
-		SELECT id
-		FROM voting_items
-		WHERE voting_id = ? AND LOWER(TRIM(vote_code)) = LOWER(TRIM(?))
-	`
+	query := `SELECT id FROM voting_items WHERE voting_id = ? AND LOWER(TRIM(vote_code)) = LOWER(TRIM(?))`
 	err := db.QueryRow(query, votingID, voteCode).Scan(&votingItemID)
 	if err != nil {
 		return 0, errors.New("voting item not found for vote code")
@@ -49,9 +51,27 @@ func GetVotingItemIDByVoteCode(db *sql.DB, votingID int64, voteCode string) (int
 	return votingItemID, nil
 }
 
-func HasClientVoted(db *sql.DB, votingID, clientID int64) bool {
+func HasClientVoted(db *sql.DB, votingID, clientID int64, voteLimit string, currentDateTime time.Time) bool {
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ?", votingID, clientID).Scan(&count)
+	var err error
+
+	if voteLimit == "daily" {
+		startOfDay := time.Date(currentDateTime.Year(), currentDateTime.Month(), currentDateTime.Day(), 0, 0, 0, 0, currentDateTime.Location())
+		endOfDay := startOfDay.Add(24 * time.Hour)
+
+		err = db.QueryRow(
+			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ? AND dt >= ? AND dt < ?",
+			votingID, clientID, startOfDay, endOfDay,
+		).Scan(&count)
+	} else if voteLimit == "one" {
+		err = db.QueryRow(
+			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ?",
+			votingID, clientID,
+		).Scan(&count)
+	} else if voteLimit == "unlimited" {
+		return false
+	}
+
 	if err != nil {
 		loggers.ErrorLogger.Error("Failed to check if client has voted", "error", err)
 		return false

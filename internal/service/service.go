@@ -120,8 +120,14 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 		return
 	}
 
-	if repository.HasClientVoted(db, votingID, clientID) {
-		logInstance.InfoLogger.Info("Client has already voted", "client_id", clientID, "voting_id", votingID)
+	voteLimit, err := repository.GetVotingLimit(db, votingID)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to get voting limit", "error", err)
+		return
+	}
+
+	if repository.HasClientVoted(db, votingID, clientID, voteLimit, parsedDate) {
+		logInstance.InfoLogger.Info("Client has already voted according to the limit", "client_id", clientID, "voting_id", votingID, "limit", voteLimit)
 		return
 	}
 
