@@ -4,6 +4,7 @@ go 1.21.5
 
 require (
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/ilyakaznacheev/cleanenv v1.5.0
 	github.com/streadway/amqp v1.1.0
 )
