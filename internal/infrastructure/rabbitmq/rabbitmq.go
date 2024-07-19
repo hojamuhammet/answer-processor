@@ -17,12 +17,6 @@ func NewConnection(url string) (*amqp.Connection, error) {
 }
 
 func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
-	if db == nil {
-		logInstance.ErrorLogger.Error("Database instance is nil")
-		return
-	}
-	logInstance.InfoLogger.Info("Database instance received in ConsumeMessages")
-
 	channel, err := conn.Channel()
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to open a channel", "error", err)

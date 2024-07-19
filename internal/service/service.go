@@ -6,6 +6,7 @@ import (
 	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/repository"
 	"answers-processor/pkg/logger"
+	"answers-processor/pkg/utils"
 	"database/sql"
 	"encoding/json"
 	"strings"
@@ -41,7 +42,7 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 
 	switch accountType {
 	case "quiz":
-		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance, wsServer)
+		processQuiz(db, clientID, message, parsedDate, logInstance, wsServer)
 	case "voting":
 		processVoting(db, messageBroker, clientID, message, parsedDate, logInstance)
 	case "shopping":
@@ -51,7 +52,10 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 	}
 }
 
-func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+	destination := message.Destination
+	text := message.Text
+
 	logInstance.InfoLogger.Info("Processing quiz message", "destination", destination, "text", text)
 
 	title, questions, questionIDs, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
@@ -91,12 +95,15 @@ func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDat
 				continue
 			}
 
+			starredSrc := utils.StarMiddleDigits(message.Source)
+
 			correctAnswerMessage := domain.CorrectAnswerMessage{
 				Answer:                 text,
 				Score:                  score,
 				Date:                   parsedDate.Format(customDateFormat),
 				SerialNumber:           serialNumber,
 				SerialNumberForCorrect: serialNumberForCorrect,
+				StarredSrc:             starredSrc, // Include starred source number
 			}
 			message, _ := json.Marshal(correctAnswerMessage)
 			wsServer.Broadcast(destination, message)
