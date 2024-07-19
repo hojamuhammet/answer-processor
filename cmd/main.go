@@ -2,13 +2,17 @@ package main
 
 import (
 	"answers-processor/config"
+	websocket "answers-processor/internal/delivery"
 	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/infrastructure/rabbitmq"
 	"answers-processor/internal/repository"
 	db "answers-processor/pkg/database"
 	"answers-processor/pkg/logger"
 	"log"
+	"net/http"
 	"os"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
@@ -35,6 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	wsServer := websocket.NewWebSocketServer()
+	go wsServer.HandleMessages()
+
+	http.HandleFunc("/quiz-ws", wsServer.HandleConnections)
+	go func() {
+		if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
+			logInstance.ErrorLogger.Error("WebSocket server failed", "error", err)
+		}
+	}()
+
 	rabbitMQConn, err := rabbitmq.NewConnection(cfg.RabbitMQ.URL)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
@@ -42,5 +56,6 @@ func main() {
 	}
 	defer rabbitMQConn.Close()
 
-	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance)
+	logInstance.InfoLogger.Info("Starting to consume messages")
+	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance, wsServer)
 }

@@ -1,6 +1,8 @@
 package rabbitmq
 
 import (
+	websocket "answers-processor/internal/delivery"
+	"answers-processor/internal/domain"
 	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/service"
 	"answers-processor/pkg/logger"
@@ -14,7 +16,13 @@ func NewConnection(url string) (*amqp.Connection, error) {
 	return amqp.Dial(url)
 }
 
-func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers) {
+func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+	if db == nil {
+		logInstance.ErrorLogger.Error("Database instance is nil")
+		return
+	}
+	logInstance.InfoLogger.Info("Database instance received in ConsumeMessages")
+
 	channel, err := conn.Channel()
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to open a channel", "error", err)
@@ -23,13 +31,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 	defer channel.Close()
 
 	err = channel.ExchangeDeclare(
-		"sms.turkmentv", // name
-		"direct",        // type
-		true,            // durable
-		false,           // auto-deleted
-		false,           // internal
-		false,           // no-wait
-		nil,             // arguments
+		"sms.turkmentv", "direct", true, false, false, false, nil,
 	)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to declare an exchange", "error", err)
@@ -37,12 +39,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 	}
 
 	queue, err := channel.QueueDeclare(
-		"sms.turkmentv", // name of the queue
-		true,            // durable
-		false,           // delete when unused
-		false,           // exclusive
-		false,           // no-wait
-		nil,             // arguments
+		"sms.turkmentv", true, false, false, false, nil,
 	)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to declare a queue", "error", err)
@@ -50,11 +47,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 	}
 
 	err = channel.QueueBind(
-		queue.Name,      // queue name
-		"",              // routing key
-		"sms.turkmentv", // exchange
-		false,
-		nil,
+		queue.Name, "", "sms.turkmentv", false, nil,
 	)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to bind queue to exchange", "error", err)
@@ -62,13 +55,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 	}
 
 	msgs, err := channel.Consume(
-		queue.Name, // queue
-		"",         // consumer
-		true,       // auto-ack
-		false,      // exclusive
-		false,      // no-local
-		false,      // no-wait
-		nil,        // args
+		queue.Name, "", true, false, false, false, nil,
 	)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to register a consumer", "error", err)
@@ -81,14 +68,15 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 		for d := range msgs {
 			logInstance.InfoLogger.Info("Received a message", "message", string(d.Body))
 
-			var smsMessage service.SMSMessage
+			var smsMessage domain.SMSMessage
 			err := json.Unmarshal(d.Body, &smsMessage)
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
 				continue
 			}
 
-			service.ProcessMessage(db, messageBroker, smsMessage, logInstance)
+			logInstance.InfoLogger.Info("Passing db instance to ProcessMessage")
+			service.ProcessMessage(db, messageBroker, wsServer, smsMessage, logInstance)
 		}
 	}()
 

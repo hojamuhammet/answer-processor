@@ -1,25 +1,26 @@
 package service
 
 import (
+	websocket "answers-processor/internal/delivery"
+	"answers-processor/internal/domain"
 	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/repository"
 	"answers-processor/pkg/logger"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 )
 
 const customDateFormat = "2006-01-02T15:04:05"
 
-type SMSMessage struct {
-	Source      string `json:"src"`
-	Destination string `json:"dst"`
-	Text        string `json:"txt"`
-	Date        string `json:"date"`
-	Parts       int    `json:"parts"`
-}
+func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, message domain.SMSMessage, logInstance *logger.Loggers) {
+	if db == nil {
+		logInstance.ErrorLogger.Error("Database instance is nil in ProcessMessage")
+		return
+	}
+	logInstance.InfoLogger.Info("Processing message", "message", message)
 
-func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, message SMSMessage, logInstance *logger.Loggers) {
 	parsedDate, err := time.Parse(customDateFormat, message.Date)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to parse date", "date", message.Date, "error", err)
@@ -40,7 +41,7 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 
 	switch accountType {
 	case "quiz":
-		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance)
+		processQuiz(db, clientID, message.Destination, message.Text, parsedDate, logInstance, wsServer)
 	case "voting":
 		processVoting(db, messageBroker, clientID, message, parsedDate, logInstance)
 	case "shopping":
@@ -50,7 +51,9 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 	}
 }
 
-func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers) {
+func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+	logInstance.InfoLogger.Info("Processing quiz message", "destination", destination, "text", text)
+
 	title, questions, questionIDs, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find quiz and questions by short number and date", "error", err)
@@ -68,32 +71,40 @@ func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDat
 
 		isCorrect := compareAnswers(correctAnswers, text)
 		score := 0
+		var serialNumber, serialNumberForCorrect int
 		if isCorrect {
 			score, err = repository.GetQuestionScore(db, questionIDs[i])
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
 			}
-		}
 
-		if repository.HasClientScored(db, questionIDs[i], clientID) {
-			logInstance.InfoLogger.Info("Client has already answered with a score", "client_id", clientID, "question_id", questionIDs[i])
-			continue
-		}
+			serialNumber, err = repository.GetNextSerialNumber(db, questionIDs[i])
+			if err != nil {
+				logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
+				continue
+			}
 
-		serialNumber, err := repository.GetNextSerialNumber(db, questionIDs[i])
-		if err != nil {
-			logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
-			continue
-		}
-
-		serialNumberForCorrect := 0
-		if isCorrect {
 			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(db, questionIDs[i])
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
 				continue
 			}
+
+			correctAnswerMessage := domain.CorrectAnswerMessage{
+				Answer:                 text,
+				Score:                  score,
+				Date:                   parsedDate.Format(customDateFormat),
+				SerialNumber:           serialNumber,
+				SerialNumberForCorrect: serialNumberForCorrect,
+			}
+			message, _ := json.Marshal(correctAnswerMessage)
+			wsServer.Broadcast(destination, message)
+		}
+
+		if repository.HasClientScored(db, questionIDs[i], clientID) {
+			logInstance.InfoLogger.Info("Client has already answered with a score", "client_id", clientID, "question_id", questionIDs[i])
+			continue
 		}
 
 		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
@@ -105,7 +116,7 @@ func processQuiz(db *sql.DB, clientID int64, destination, text string, parsedDat
 	}
 }
 
-func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
 	votingID, err := repository.GetVotingByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
@@ -160,7 +171,7 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
 }
 
-func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
 	lotID, err := repository.GetLotByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
