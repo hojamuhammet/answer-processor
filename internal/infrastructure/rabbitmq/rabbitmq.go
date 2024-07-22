@@ -60,8 +60,6 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 
 	go func() {
 		for d := range msgs {
-			logInstance.InfoLogger.Info("Received a message", "message", string(d.Body))
-
 			var smsMessage domain.SMSMessage
 			err := json.Unmarshal(d.Body, &smsMessage)
 			if err != nil {
@@ -69,7 +67,8 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 				continue
 			}
 
-			logInstance.InfoLogger.Info("Passing db instance to ProcessMessage")
+			logInstance.InfoLogger.Info("Received a message", "src", smsMessage.Source, "dst", smsMessage.Destination, "text", smsMessage.Text, "date", smsMessage.Date, "parts", smsMessage.Parts)
+
 			service.ProcessMessage(db, messageBroker, wsServer, smsMessage, logInstance)
 		}
 	}()

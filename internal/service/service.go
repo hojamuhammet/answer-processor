@@ -20,7 +20,6 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 		logInstance.ErrorLogger.Error("Database instance is nil in ProcessMessage")
 		return
 	}
-	logInstance.InfoLogger.Info("Processing message", "message", message)
 
 	parsedDate, err := time.Parse(customDateFormat, message.Date)
 	if err != nil {
@@ -56,18 +55,24 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 	destination := message.Destination
 	text := message.Text
 
-	logInstance.InfoLogger.Info("Processing quiz message", "destination", destination, "text", text)
-
-	title, questions, questionIDs, quizID, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
+	_, questions, questionIDs, quizID, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find quiz and questions by short number and date", "error", err)
+		logInstance.ErrorLogger.Error("Failed to find quiz and questions", "error", err)
 		return
 	}
 
-	logInstance.InfoLogger.Info("Quiz found", "title", title, "quiz_id", quizID)
-	for i, question := range questions {
-		logInstance.InfoLogger.Info("Question found", "question", question, "question_id", questionIDs[i])
-		correctAnswers, err := repository.GetQuestionAnswers(db, questionIDs[i])
+	logInstance.InfoLogger.Info("Quiz found", "quiz_id", quizID, "questions_count", len(questions))
+
+	// Batch check if the client has already scored for these questions
+	scoredMap, err := repository.HasClientScoredBatch(db, questionIDs, clientID)
+	if err != nil {
+		logInstance.ErrorLogger.Error("Failed to batch check if client has scored", "error", err)
+		return
+	}
+
+	for i := range questions {
+		questionID := questionIDs[i]
+		correctAnswers, err := repository.GetQuestionAnswers(db, questionID)
 		if err != nil {
 			logInstance.ErrorLogger.Error("Failed to get question answers", "error", err)
 			continue
@@ -76,24 +81,23 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 		isCorrect := compareAnswers(correctAnswers, text)
 		if isCorrect {
 			// Check if the client has already answered correctly
-			if repository.HasClientScored(db, questionIDs[i], clientID) {
-				logInstance.InfoLogger.Info("Client has already answered correctly", "client_id", clientID, "question_id", questionIDs[i])
+			if scoredMap[questionID] {
 				continue
 			}
 
-			score, err := repository.GetQuestionScore(db, questionIDs[i])
+			score, err := repository.GetQuestionScore(db, questionID)
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
 			}
 
-			serialNumber, err := repository.GetNextSerialNumber(db, questionIDs[i])
+			serialNumber, err := repository.GetNextSerialNumber(db, questionID)
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
 				continue
 			}
 
-			serialNumberForCorrect, err := repository.GetNextSerialNumberForCorrect(db, questionIDs[i])
+			serialNumberForCorrect, err := repository.GetNextSerialNumberForCorrect(db, questionID)
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
 				continue
@@ -109,23 +113,27 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 				SerialNumberForCorrect: serialNumberForCorrect,
 				StarredSrc:             starredSrc,
 				QuizID:                 quizID,
-				QuestionID:             questionIDs[i],
+				QuestionID:             questionID,
 			}
-			msg, _ := json.Marshal(correctAnswerMessage)
+			msg, _ := json.MarshalIndent(correctAnswerMessage, "", "    ")
 			wsServer.Broadcast(destination, msg)
+
+			// Mark as scored to avoid re-checking
+			scoredMap[questionID] = true
+
+			logInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
 		}
 
-		if repository.HasClientScored(db, questionIDs[i], clientID) {
-			logInstance.InfoLogger.Info("Client has already answered with a score", "client_id", clientID, "question_id", questionIDs[i])
+		if scoredMap[questionID] {
 			continue
 		}
 
-		err = repository.InsertAnswer(db, questionIDs[i], text, parsedDate, clientID, 0, 0, 0)
+		err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, 0, 0, 0)
 		if err != nil {
 			logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
 		}
-		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionIDs[i], "is_correct", isCorrect, "score", 0, "serial_number", 0, "serial_number_for_correct", 0)
+		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionID, "is_correct", isCorrect)
 	}
 }
 
@@ -136,11 +144,9 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 		return
 	}
 
-	logInstance.InfoLogger.Info("Processing vote", "vote_code", message.Text)
-
 	votingItemID, err := repository.GetVotingItemIDByVoteCode(db, votingID, message.Text)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find voting item by vote code", "vote_code", message.Text, "error", err)
+		logInstance.ErrorLogger.Error("Failed to find voting item by vote code", "error", err)
 		return
 	}
 
@@ -151,7 +157,6 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 	}
 
 	if repository.HasClientVoted(db, votingID, clientID, voteLimit, parsedDate) {
-		logInstance.InfoLogger.Info("Client has already voted according to the limit", "client_id", clientID, "voting_id", votingID, "limit", voteLimit)
 		return
 	}
 

@@ -137,3 +137,36 @@ func InsertAnswer(db *sql.DB, questionID int64, msg string, dt time.Time, client
 	)
 	return err
 }
+
+func HasClientScoredBatch(db *sql.DB, questionIDs []int64, clientID int64) (map[int64]bool, error) {
+	query := `
+		SELECT question_id
+		FROM answers
+		WHERE client_id = ? AND question_id IN (?)
+		AND score > 0
+	`
+	args := make([]interface{}, len(questionIDs)+1)
+	args[0] = clientID
+	for i, id := range questionIDs {
+		args[i+1] = id
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	scoredMap := make(map[int64]bool)
+	for rows.Next() {
+		var questionID int64
+		if err := rows.Scan(&questionID); err != nil {
+			return nil, err
+		}
+		scoredMap[questionID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return scoredMap, nil
+}
