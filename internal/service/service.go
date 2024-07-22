@@ -202,7 +202,7 @@ func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClie
 	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
 	// Send message notification
-	err = messageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted via smpp.")
+	err = messageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted.")
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
