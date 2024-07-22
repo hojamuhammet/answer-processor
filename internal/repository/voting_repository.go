@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-func GetVotingLimit(db *sql.DB, votingID int64) (string, error) {
-	var voteLimit string
-	query := `SELECT vote_limit FROM votings WHERE id = ?`
-	err := db.QueryRow(query, votingID).Scan(&voteLimit)
+func GetVotingStatus(db *sql.DB, votingID int64) (string, error) {
+	var status string
+	query := `SELECT status FROM votings WHERE id = ?`
+	err := db.QueryRow(query, votingID).Scan(&status)
 	if err != nil {
 		return "", err
 	}
-	return voteLimit, nil
+	return status, nil
 }
 
 func GetVotingItemTitle(db *sql.DB, votingItemID int64) (string, error) {
@@ -51,11 +51,11 @@ func GetVotingItemIDByVoteCode(db *sql.DB, votingID int64, voteCode string) (int
 	return votingItemID, nil
 }
 
-func HasClientVoted(db *sql.DB, votingID, clientID int64, voteLimit string, currentDateTime time.Time) bool {
+func HasClientVoted(db *sql.DB, votingID, clientID int64, status string, currentDateTime time.Time) bool {
 	var count int
 	var err error
 
-	if voteLimit == "daily" {
+	if status == "daily" {
 		startOfDay := time.Date(currentDateTime.Year(), currentDateTime.Month(), currentDateTime.Day(), 0, 0, 0, 0, currentDateTime.Location())
 		endOfDay := startOfDay.Add(24 * time.Hour)
 
@@ -63,12 +63,12 @@ func HasClientVoted(db *sql.DB, votingID, clientID int64, voteLimit string, curr
 			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ? AND dt >= ? AND dt < ?",
 			votingID, clientID, startOfDay, endOfDay,
 		).Scan(&count)
-	} else if voteLimit == "one" {
+	} else if status == "one" {
 		err = db.QueryRow(
 			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ?",
 			votingID, clientID,
 		).Scan(&count)
-	} else if voteLimit == "unlimited" {
+	} else if status == "unlimited" {
 		return false
 	}
 

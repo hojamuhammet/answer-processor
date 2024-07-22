@@ -45,7 +45,7 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 	case "voting":
 		processVoting(db, messageBroker, clientID, message, parsedDate, logInstance)
 	case "shopping":
-		processShopping(db, messageBroker, clientID, message, parsedDate, logInstance)
+		processShopping(db, messageBroker, clientID, message, parsedDate, logInstance, wsServer)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -150,13 +150,13 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 		return
 	}
 
-	voteLimit, err := repository.GetVotingLimit(db, votingID)
+	status, err := repository.GetVotingStatus(db, votingID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to get voting limit", "error", err)
+		logInstance.ErrorLogger.Error("Failed to get voting status", "error", err)
 		return
 	}
 
-	if repository.HasClientVoted(db, votingID, clientID, voteLimit, parsedDate) {
+	if repository.HasClientVoted(db, votingID, clientID, status, parsedDate) {
 		return
 	}
 
@@ -189,7 +189,7 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
 }
 
-func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
 	lotID, err := repository.GetLotByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
@@ -204,13 +204,24 @@ func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClie
 
 	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
-	// Send message notification
+	shoppingMessage := domain.ShoppingMessage{
+		Msg:      message.Text,
+		Date:     parsedDate.Format(customDateFormat),
+		ClientID: clientID,
+		LotID:    lotID,
+		Src:      message.Source,
+	}
+	msg, _ := json.MarshalIndent(shoppingMessage, "", "    ")
+	wsServer.Broadcast(message.Destination, msg)
+
 	err = messageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted via smpp.")
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
 		logInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
 	}
+
+	logInstance.InfoLogger.Info("Message recorded and broadcasted", "lot_id", lotID, "client_id", clientID, "msg", message.Text)
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {
