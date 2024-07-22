@@ -18,3 +18,19 @@ type CorrectAnswerMessage struct {
 	QuizID                 int64  `json:"quiz_id"`
 	QuestionID             int64  `json:"question_id"`
 }
+
+type VotingMessage struct {
+	VotingID     int64  `json:"voting_id"`
+	VotingItemID int64  `json:"voting_item_id"`
+	ClientID     int64  `json:"client_id"`
+	Message      string `json:"message"`
+	Date         string `json:"date"`
+}
+
+type ShoppingMessage struct {
+	LotID    int64  `json:"lot_id"`
+	ClientID int64  `json:"client_id"`
+	Message  string `json:"message"`
+	Date     string `json:"date"`
+	Src      string `json:"src"`
+}

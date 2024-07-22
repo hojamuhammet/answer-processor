@@ -39,10 +39,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	wsServer := websocket.NewWebSocketServer()
-	go wsServer.HandleMessages()
+	quizWSServer := websocket.NewWebSocketServer()
+	votingWSServer := websocket.NewWebSocketServer()
+	shoppingWSServer := websocket.NewWebSocketServer()
 
-	http.HandleFunc("/ws/quiz-ws", wsServer.HandleConnections)
+	go quizWSServer.HandleMessages()
+	go votingWSServer.HandleMessages()
+	go shoppingWSServer.HandleMessages()
+
+	http.HandleFunc("/ws/quiz", quizWSServer.HandleConnections)
+	http.HandleFunc("/ws/voting", votingWSServer.HandleConnections)
+	http.HandleFunc("/ws/shop", shoppingWSServer.HandleConnections)
+
 	go func() {
 		if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
 			logInstance.ErrorLogger.Error("WebSocket server failed", "error", err)
@@ -57,5 +65,5 @@ func main() {
 	defer rabbitMQConn.Close()
 
 	logInstance.InfoLogger.Info("Starting to consume messages")
-	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance, wsServer)
+	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance, quizWSServer, votingWSServer, shoppingWSServer)
 }

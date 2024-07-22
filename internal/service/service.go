@@ -15,7 +15,7 @@ import (
 
 const customDateFormat = "2006-01-02T15:04:05"
 
-func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, message domain.SMSMessage, logInstance *logger.Loggers) {
+func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, quizWSServer, votingWSServer, shoppingWSServer *websocket.WebSocketServer, message domain.SMSMessage, logInstance *logger.Loggers) {
 	if db == nil {
 		logInstance.ErrorLogger.Error("Database instance is nil in ProcessMessage")
 		return
@@ -41,11 +41,11 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 
 	switch accountType {
 	case "quiz":
-		processQuiz(db, clientID, message, parsedDate, logInstance, wsServer)
+		processQuiz(db, clientID, message, parsedDate, logInstance, quizWSServer)
 	case "voting":
-		processVoting(db, messageBroker, clientID, message, parsedDate, logInstance)
+		processVoting(db, messageBroker, votingWSServer, clientID, message, parsedDate, logInstance)
 	case "shopping":
-		processShopping(db, messageBroker, clientID, message, parsedDate, logInstance, wsServer)
+		processShopping(db, messageBroker, shoppingWSServer, clientID, message, parsedDate, logInstance)
 	default:
 		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
@@ -137,44 +137,31 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 	}
 }
 
-func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
-	votingID, err := repository.GetVotingByShortNumber(db, message.Destination, parsedDate)
+func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+	votingID, status, err := repository.GetVotingDetails(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
 		return
 	}
 
-	votingItemID, err := repository.GetVotingItemIDByVoteCode(db, votingID, message.Text)
+	votingItemID, votingItemTitle, err := repository.GetVotingItemDetails(db, votingID, message.Text)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find voting item by vote code", "error", err)
 		return
 	}
 
-	status, err := repository.GetVotingStatus(db, votingID)
+	hasVoted, err := repository.HasClientVoted(db, votingID, clientID, status, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to get voting status", "error", err)
+		logInstance.ErrorLogger.Error("Failed to check if client has voted", "error", err)
+		return
+	}
+	if hasVoted {
 		return
 	}
 
-	if repository.HasClientVoted(db, votingID, clientID, status, parsedDate) {
-		return
-	}
-
-	err = repository.InsertVotingMessage(db, votingID, votingItemID, message.Text, parsedDate, clientID)
+	err = repository.InsertVotingMessageAndUpdateCount(db, votingID, votingItemID, message.Text, parsedDate, clientID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to insert voting message", "error", err)
-		return
-	}
-
-	err = repository.UpdateVoteCount(db, votingItemID)
-	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to update vote count", "error", err)
-		return
-	}
-
-	votingItemTitle, err := repository.GetVotingItemTitle(db, votingItemID)
-	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to get voting item title", "error", err)
+		logInstance.ErrorLogger.Error("Failed to insert voting message and update count", "error", err)
 		return
 	}
 
@@ -186,34 +173,35 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 		logInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
 	}
 
-	logInstance.InfoLogger.Info("Vote recorded", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID)
+	votingMessage := domain.VotingMessage{
+		VotingID:     votingID,
+		VotingItemID: votingItemID,
+		ClientID:     clientID,
+		Message:      message.Text,
+		Date:         parsedDate.Format(customDateFormat),
+	}
+	msg, _ := json.MarshalIndent(votingMessage, "", "    ")
+	wsServer.Broadcast(message.Destination, msg)
+
+	logInstance.InfoLogger.Info("Voting message processed and broadcasted", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
 }
 
-func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
-	lotID, err := repository.GetLotByShortNumber(db, message.Destination, parsedDate)
+func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
+	lotID, err := repository.GetLotDetailsByShortNumber(db, message.Destination, parsedDate)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
 		return
 	}
 
-	err = repository.InsertLotSMSMessage(db, lotID, message.Text, parsedDate, clientID)
+	err = repository.InsertLotMessageAndUpdate(db, lotID, message.Text, parsedDate, clientID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to insert lot SMS message", "error", err)
+		logInstance.ErrorLogger.Error("Failed to insert lot SMS message and update", "error", err)
 		return
 	}
 
 	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
-	shoppingMessage := domain.ShoppingMessage{
-		Msg:      message.Text,
-		Date:     parsedDate.Format(customDateFormat),
-		ClientID: clientID,
-		LotID:    lotID,
-		Src:      message.Source,
-	}
-	msg, _ := json.MarshalIndent(shoppingMessage, "", "    ")
-	wsServer.Broadcast(message.Destination, msg)
-
+	// Send message notification
 	err = messageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted via smpp.")
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
@@ -221,7 +209,18 @@ func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClie
 		logInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
 	}
 
-	logInstance.InfoLogger.Info("Message recorded and broadcasted", "lot_id", lotID, "client_id", clientID, "msg", message.Text)
+	// Broadcast to WebSocket
+	shoppingMessage := domain.ShoppingMessage{
+		LotID:    lotID,
+		ClientID: clientID,
+		Message:  message.Text,
+		Date:     parsedDate.Format(customDateFormat),
+		Src:      message.Source,
+	}
+	msg, _ := json.MarshalIndent(shoppingMessage, "", "    ")
+	wsServer.Broadcast(message.Destination, msg)
+
+	logInstance.InfoLogger.Info("Shopping message processed and broadcasted", "lot_id", lotID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {

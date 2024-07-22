@@ -6,91 +6,84 @@ import (
 	"time"
 )
 
-func GetVotingStatus(db *sql.DB, votingID int64) (string, error) {
-	var status string
-	query := `SELECT status FROM votings WHERE id = ?`
-	err := db.QueryRow(query, votingID).Scan(&status)
-	if err != nil {
-		return "", err
-	}
-	return status, nil
-}
-
-func GetVotingItemTitle(db *sql.DB, votingItemID int64) (string, error) {
-	var title string
-	query := `SELECT title FROM voting_items WHERE id = ?`
-	err := db.QueryRow(query, votingItemID).Scan(&title)
-	if err != nil {
-		return "", errors.New("voting item title not found")
-	}
-	return title, nil
-}
-
-func GetVotingByShortNumber(db *sql.DB, shortNumber string, currentDateTime time.Time) (int64, error) {
+func GetVotingDetails(db *sql.DB, shortNumber string, currentDateTime time.Time) (int64, string, error) {
 	var votingID int64
+	var status string
 	query := `
-        SELECT v.id
+        SELECT v.id, v.status
         FROM votings v
         JOIN accounts a ON v.account_id = a.id
         WHERE a.short_number = ? AND v.starts_at <= ? AND v.ends_at >= ?
     `
-	err := db.QueryRow(query, shortNumber, currentDateTime, currentDateTime).Scan(&votingID)
+	err := db.QueryRow(query, shortNumber, currentDateTime, currentDateTime).Scan(&votingID, &status)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return votingID, nil
+	return votingID, status, nil
 }
 
-func GetVotingItemIDByVoteCode(db *sql.DB, votingID int64, voteCode string) (int64, error) {
+func GetVotingItemDetails(db *sql.DB, votingID int64, voteCode string) (int64, string, error) {
 	var votingItemID int64
-	query := `SELECT id FROM voting_items WHERE voting_id = ? AND LOWER(TRIM(vote_code)) = LOWER(TRIM(?))`
-	err := db.QueryRow(query, votingID, voteCode).Scan(&votingItemID)
+	var title string
+	query := `SELECT id, title FROM voting_items WHERE voting_id = ? AND LOWER(TRIM(vote_code)) = LOWER(TRIM(?))`
+	err := db.QueryRow(query, votingID, voteCode).Scan(&votingItemID, &title)
 	if err != nil {
-		return 0, errors.New("voting item not found for vote code")
+		return 0, "", errors.New("voting item not found for vote code")
 	}
-	return votingItemID, nil
+	return votingItemID, title, nil
 }
 
-func HasClientVoted(db *sql.DB, votingID, clientID int64, status string, currentDateTime time.Time) bool {
+func HasClientVoted(db *sql.DB, votingID, clientID int64, status string, currentDateTime time.Time) (bool, error) {
 	var count int
 	var err error
 
-	if status == "daily" {
+	switch status {
+	case "daily":
 		startOfDay := time.Date(currentDateTime.Year(), currentDateTime.Month(), currentDateTime.Day(), 0, 0, 0, 0, currentDateTime.Location())
 		endOfDay := startOfDay.Add(24 * time.Hour)
-
 		err = db.QueryRow(
 			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ? AND dt >= ? AND dt < ?",
 			votingID, clientID, startOfDay, endOfDay,
 		).Scan(&count)
-	} else if status == "one" {
+	case "one":
 		err = db.QueryRow(
 			"SELECT COUNT(*) FROM voting_sms_messages WHERE voting_id = ? AND client_id = ?",
 			votingID, clientID,
 		).Scan(&count)
-	} else if status == "unlimited" {
-		return false
+	case "unlimited":
+		return false, nil
 	}
 
 	if err != nil {
 		loggers.ErrorLogger.Error("Failed to check if client has voted", "error", err)
-		return false
+		return false, err
 	}
-	return count > 0
+	return count > 0, nil
 }
 
-func InsertVotingMessage(db *sql.DB, votingID, votingItemID int64, msg string, dt time.Time, clientID int64) error {
-	_, err := db.Exec(
+func InsertVotingMessageAndUpdateCount(db *sql.DB, votingID, votingItemID int64, msg string, dt time.Time, clientID int64) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(
 		"INSERT INTO voting_sms_messages (voting_id, voting_item_id, msg, dt, client_id) VALUES (?, ?, ?, ?, ?)",
 		votingID, votingItemID, msg, dt, clientID,
 	)
-	return err
-}
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
 
-func UpdateVoteCount(db *sql.DB, votingItemID int64) error {
-	_, err := db.Exec(
+	_, err = tx.Exec(
 		"UPDATE voting_items SET votes_count = votes_count + 1 WHERE id = ?",
 		votingItemID,
 	)
-	return err
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
 }

@@ -16,7 +16,7 @@ func NewConnection(url string) (*amqp.Connection, error) {
 	return amqp.Dial(url)
 }
 
-func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_broker.MessageBrokerClient, logInstance *logger.Loggers, quizWSServer, votingWSServer, shoppingWSServer *websocket.WebSocketServer) {
 	channel, err := conn.Channel()
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to open a channel", "error", err)
@@ -69,7 +69,7 @@ func ConsumeMessages(conn *amqp.Connection, db *sql.DB, messageBroker *message_b
 
 			logInstance.InfoLogger.Info("Received a message", "src", smsMessage.Source, "dst", smsMessage.Destination, "text", smsMessage.Text, "date", smsMessage.Date, "parts", smsMessage.Parts)
 
-			service.ProcessMessage(db, messageBroker, wsServer, smsMessage, logInstance)
+			service.ProcessMessage(db, messageBroker, quizWSServer, votingWSServer, shoppingWSServer, smsMessage, logInstance)
 		}
 	}()
 
