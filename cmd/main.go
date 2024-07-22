@@ -42,7 +42,7 @@ func main() {
 	wsServer := websocket.NewWebSocketServer()
 	go wsServer.HandleMessages()
 
-	http.HandleFunc("/quiz-ws", wsServer.HandleConnections)
+	http.HandleFunc("/ws/quiz-ws", wsServer.HandleConnections)
 	go func() {
 		if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
 			logInstance.ErrorLogger.Error("WebSocket server failed", "error", err)
