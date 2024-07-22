@@ -34,3 +34,9 @@ type ShoppingMessage struct {
 	Date     string `json:"date"`
 	Src      string `json:"src"`
 }
+
+type RelayMessage struct {
+	Src string `json:"src"`
+	Dst string `json:"dst"`
+	Msg string `json:"msg"`
+}

@@ -2,6 +2,7 @@ package message_broker
 
 import (
 	"answers-processor/config"
+	"answers-processor/internal/domain"
 	"answers-processor/pkg/logger"
 	"encoding/json"
 	"fmt"
@@ -19,12 +20,6 @@ type MessageBrokerClient struct {
 	Channel *amqp.Channel
 	Logger  *logger.Loggers
 	Queue   string
-}
-
-type RelayMessage struct {
-	Src string `json:"src"`
-	Dst string `json:"dst"`
-	Msg string `json:"msg"`
 }
 
 func NewMessageBrokerClient(cfg *config.Config, loggers *logger.Loggers) (*MessageBrokerClient, error) {
@@ -60,7 +55,7 @@ func NewMessageBrokerClient(cfg *config.Config, loggers *logger.Loggers) (*Messa
 func (c *MessageBrokerClient) SendMessage(src, dest, text string) error {
 	c.Logger.InfoLogger.Info("Sending message via RabbitMQ", "src", src, "dst", dest, "text", text)
 
-	message := RelayMessage{
+	message := domain.RelayMessage{
 		Src: src,
 		Dst: dest,
 		Msg: text,
