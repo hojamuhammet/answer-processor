@@ -224,5 +224,9 @@ func compareAnswers(correctAnswers []string, userAnswer string) bool {
 }
 
 func sanitizeAnswer(answer string) string {
-	return strings.ToLower(strings.TrimSpace(answer))
+	parts := strings.Split(answer, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return strings.ToLower(strings.Join(parts, ","))
 }

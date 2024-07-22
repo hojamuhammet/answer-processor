@@ -90,7 +90,11 @@ func GetQuestionAnswers(db *sql.DB, questionID int64) ([]string, error) {
 }
 
 func sanitizeAnswer(answer string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(answer), " ", ""))
+	parts := strings.Split(answer, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return strings.ToLower(strings.Join(parts, ","))
 }
 
 func GetQuestionScore(db *sql.DB, questionID int64) (int, error) {
