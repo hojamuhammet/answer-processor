@@ -79,27 +79,39 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 		}
 
 		isCorrect := compareAnswers(correctAnswers, text)
+
+		// Get serial number before insertion
+		serialNumber, err := repository.GetNextSerialNumber(db, questionID)
+		if err != nil {
+			logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
+			continue
+		}
+
+		// Check if the client has already answered this question correctly
+		if scoredMap[questionID] {
+			// Insert the answer as incorrect since it has already been correctly answered
+			err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, 0, serialNumber, 0)
+			if err != nil {
+				logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
+				continue
+			}
+			logInstance.InfoLogger.Info("Answer inserted for previously correctly answered question", "question_id", questionID, "serial_number", serialNumber)
+			continue
+		}
+
+		// Generate serialNumberForCorrect and score only if the answer is correct and has not been previously answered correctly
+		serialNumberForCorrect := 0
+		score := 0
 		if isCorrect {
-			// Check if the client has already answered correctly
-			if scoredMap[questionID] {
-				continue
-			}
-
-			score, err := repository.GetQuestionScore(db, questionID)
-			if err != nil {
-				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
-				continue
-			}
-
-			serialNumber, err := repository.GetNextSerialNumber(db, questionID)
-			if err != nil {
-				logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
-				continue
-			}
-
-			serialNumberForCorrect, err := repository.GetNextSerialNumberForCorrect(db, questionID)
+			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(db, questionID)
 			if err != nil {
 				logInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
+				continue
+			}
+
+			score, err = repository.GetQuestionScore(db, questionID)
+			if err != nil {
+				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
 			}
 
@@ -124,16 +136,13 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 			logInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
 		}
 
-		if scoredMap[questionID] {
-			continue
-		}
-
-		err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, 0, 0, 0)
+		// Insert the answer with the correct serial numbers and score
+		err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
 		if err != nil {
 			logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
 		}
-		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionID, "is_correct", isCorrect)
+		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionID, "is_correct", isCorrect, "serial_number", serialNumber, "serial_number_for_correct", serialNumberForCorrect)
 	}
 }
 

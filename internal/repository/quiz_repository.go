@@ -146,8 +146,7 @@ func HasClientScoredBatch(db *sql.DB, questionIDs []int64, clientID int64) (map[
 	query := `
 		SELECT question_id
 		FROM answers
-		WHERE client_id = ? AND question_id IN (?)
-		AND score > 0
+		WHERE client_id = ? AND question_id IN (?) AND score > 0
 	`
 	args := make([]interface{}, len(questionIDs)+1)
 	args[0] = clientID
