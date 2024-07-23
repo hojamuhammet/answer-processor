@@ -13,105 +13,116 @@ import (
 	"time"
 )
 
+type Service struct {
+	DB            *sql.DB
+	MessageBroker *message_broker.MessageBrokerClient
+	WSServer      *websocket.WebSocketServer
+	LogInstance   *logger.Loggers
+}
+
 const customDateFormat = "2006-01-02T15:04:05"
 
-func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, quizWSServer, votingWSServer, shoppingWSServer *websocket.WebSocketServer, message domain.SMSMessage, logInstance *logger.Loggers) {
-	if db == nil {
-		logInstance.ErrorLogger.Error("Database instance is nil in ProcessMessage")
+func NewService(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) *Service {
+	return &Service{
+		DB:            db,
+		MessageBroker: messageBroker,
+		WSServer:      wsServer,
+		LogInstance:   logInstance,
+	}
+}
+
+func (s *Service) ProcessMessage(message domain.SMSMessage) {
+	if s.DB == nil {
+		s.LogInstance.ErrorLogger.Error("Database instance is nil in ProcessMessage")
 		return
 	}
 
 	parsedDate, err := time.Parse(customDateFormat, message.Date)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to parse date", "date", message.Date, "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to parse date", "date", message.Date, "error", err)
 		return
 	}
 
-	clientID, err := repository.InsertClientIfNotExists(db, message.Source)
+	clientID, err := repository.InsertClientIfNotExists(s.DB, message.Source)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to insert or find client", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to insert or find client", "error", err)
 		return
 	}
 
-	accountType, err := repository.GetAccountType(db, message.Destination)
+	accountType, err := repository.GetAccountType(s.DB, message.Destination)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to get account type", "number", message.Destination)
+		s.LogInstance.ErrorLogger.Error("Failed to get account type", "number", message.Destination)
 		return
 	}
 
 	switch accountType {
 	case "quiz":
-		processQuiz(db, clientID, message, parsedDate, logInstance, quizWSServer)
+		s.processQuiz(clientID, message, parsedDate)
 	case "voting":
-		processVoting(db, messageBroker, votingWSServer, clientID, message, parsedDate, logInstance)
+		s.processVoting(clientID, message, parsedDate)
 	case "shopping":
-		processShopping(db, messageBroker, shoppingWSServer, clientID, message, parsedDate, logInstance)
+		s.processShopping(clientID, message, parsedDate)
 	default:
-		logInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
+		s.LogInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
 	}
 }
 
-func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers, wsServer *websocket.WebSocketServer) {
+func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
 	destination := message.Destination
 	text := message.Text
 
-	_, questions, questionIDs, quizID, err := repository.GetAccountAndQuestions(db, destination, parsedDate)
+	_, questions, questionIDs, quizID, err := repository.GetAccountAndQuestions(s.DB, destination, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find quiz and questions", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to find quiz and questions", "error", err)
 		return
 	}
 
-	logInstance.InfoLogger.Info("Quiz found", "quiz_id", quizID, "questions_count", len(questions))
+	s.LogInstance.InfoLogger.Info("Quiz found", "quiz_id", quizID, "questions_count", len(questions))
 
-	// Batch check if the client has already scored for these questions
-	scoredMap, err := repository.HasClientScoredBatch(db, questionIDs, clientID)
+	scoredMap, err := repository.HasClientScoredBatch(s.DB, questionIDs, clientID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to batch check if client has scored", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to batch check if client has scored", "error", err)
 		return
 	}
 
 	for i := range questions {
 		questionID := questionIDs[i]
-		correctAnswers, err := repository.GetQuestionAnswers(db, questionID)
+		correctAnswers, err := repository.GetQuestionAnswers(s.DB, questionID)
 		if err != nil {
-			logInstance.ErrorLogger.Error("Failed to get question answers", "error", err)
+			s.LogInstance.ErrorLogger.Error("Failed to get question answers", "error", err)
 			continue
 		}
 
 		isCorrect := compareAnswers(correctAnswers, text)
 
-		// Get serial number before insertion
-		serialNumber, err := repository.GetNextSerialNumber(db, questionID)
+		serialNumber, err := repository.GetNextSerialNumber(s.DB, questionID)
 		if err != nil {
-			logInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
+			s.LogInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
 			continue
 		}
 
-		// Check if the client has already answered this question correctly
 		if scoredMap[questionID] {
-			// Insert the answer as incorrect since it has already been correctly answered
-			err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, 0, serialNumber, 0)
+			err = repository.InsertAnswer(s.DB, questionID, text, parsedDate, clientID, 0, serialNumber, 0)
 			if err != nil {
-				logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
+				s.LogInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 				continue
 			}
-			logInstance.InfoLogger.Info("Answer inserted for previously correctly answered question", "question_id", questionID, "serial_number", serialNumber)
+			s.LogInstance.InfoLogger.Info("Answer inserted for previously correctly answered question", "question_id", questionID, "serial_number", serialNumber)
 			continue
 		}
 
-		// Generate serialNumberForCorrect and score only if the answer is correct and has not been previously answered correctly
 		serialNumberForCorrect := 0
 		score := 0
 		if isCorrect {
-			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(db, questionID)
+			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(s.DB, questionID)
 			if err != nil {
-				logInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
+				s.LogInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
 				continue
 			}
 
-			score, err = repository.GetQuestionScore(db, questionID)
+			score, err = repository.GetQuestionScore(s.DB, questionID)
 			if err != nil {
-				logInstance.ErrorLogger.Error("Failed to get question score", "error", err)
+				s.LogInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
 			}
 
@@ -128,58 +139,56 @@ func processQuiz(db *sql.DB, clientID int64, message domain.SMSMessage, parsedDa
 				QuestionID:             questionID,
 			}
 			msg, _ := json.MarshalIndent(correctAnswerMessage, "", "    ")
-			wsServer.Broadcast(destination, msg)
+			s.WSServer.Broadcast(destination, msg)
 
-			// Mark as scored to avoid re-checking
 			scoredMap[questionID] = true
 
-			logInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
+			s.LogInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
 		}
 
-		// Insert the answer with the correct serial numbers and score
-		err = repository.InsertAnswer(db, questionID, text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
+		err = repository.InsertAnswer(s.DB, questionID, text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
 		if err != nil {
-			logInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
+			s.LogInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
 		}
-		logInstance.InfoLogger.Info("Answer inserted", "question_id", questionID, "is_correct", isCorrect, "serial_number", serialNumber, "serial_number_for_correct", serialNumberForCorrect)
+		s.LogInstance.InfoLogger.Info("Answer inserted", "question_id", questionID, "is_correct", isCorrect, "serial_number", serialNumber, "serial_number_for_correct", serialNumberForCorrect)
 	}
 }
 
-func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
-	votingID, status, err := repository.GetVotingDetails(db, message.Destination, parsedDate)
+func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
+	votingID, status, err := repository.GetVotingDetails(s.DB, message.Destination, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
 		return
 	}
 
-	votingItemID, votingItemTitle, err := repository.GetVotingItemDetails(db, votingID, message.Text)
+	votingItemID, votingItemTitle, err := repository.GetVotingItemDetails(s.DB, votingID, message.Text)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find voting item by vote code", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to find voting item by vote code", "error", err)
 		return
 	}
 
-	hasVoted, err := repository.HasClientVoted(db, votingID, clientID, status, parsedDate)
+	hasVoted, err := repository.HasClientVoted(s.DB, votingID, clientID, status, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to check if client has voted", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to check if client has voted", "error", err)
 		return
 	}
 	if hasVoted {
 		return
 	}
 
-	err = repository.InsertVotingMessageAndUpdateCount(db, votingID, votingItemID, message.Text, parsedDate, clientID)
+	err = repository.InsertVotingMessageAndUpdateCount(s.DB, votingID, votingItemID, message.Text, parsedDate, clientID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to insert voting message and update count", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to insert voting message and update count", "error", err)
 		return
 	}
 
 	smsText := votingItemTitle + " ucin beren sesiniz kabul edildi"
-	err = messageBroker.SendMessage(message.Destination, message.Source, smsText)
+	err = s.MessageBroker.SendMessage(message.Destination, message.Source, smsText)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
-		logInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
+		s.LogInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
 	}
 
 	votingMessage := domain.VotingMessage{
@@ -190,32 +199,32 @@ func processVoting(db *sql.DB, messageBroker *message_broker.MessageBrokerClient
 		Date:         parsedDate.Format(customDateFormat),
 	}
 	msg, _ := json.MarshalIndent(votingMessage, "", "    ")
-	wsServer.Broadcast(message.Destination, msg)
+	s.WSServer.Broadcast(message.Destination, msg)
 
-	logInstance.InfoLogger.Info("Voting message processed and broadcasted", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
+	s.LogInstance.InfoLogger.Info("Voting message processed and broadcasted", "voting_id", votingID, "voting_item_id", votingItemID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
 }
 
-func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, clientID int64, message domain.SMSMessage, parsedDate time.Time, logInstance *logger.Loggers) {
-	lotID, err := repository.GetLotDetailsByShortNumber(db, message.Destination, parsedDate)
+func (s *Service) processShopping(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
+	lotID, err := repository.GetLotDetailsByShortNumber(s.DB, message.Destination, parsedDate)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
 		return
 	}
 
-	err = repository.InsertLotMessageAndUpdate(db, lotID, message.Text, parsedDate, clientID)
+	err = repository.InsertLotMessageAndUpdate(s.DB, lotID, message.Text, parsedDate, clientID)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to insert lot SMS message and update", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to insert lot SMS message and update", "error", err)
 		return
 	}
 
-	logInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
+	s.LogInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
 	// Send message notification
-	err = messageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted.")
+	err = s.MessageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted.")
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
+		s.LogInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
-		logInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
+		s.LogInstance.InfoLogger.Info("Message notification sent successfully", "to", message.Source)
 	}
 
 	// Broadcast to WebSocket
@@ -227,9 +236,9 @@ func processShopping(db *sql.DB, messageBroker *message_broker.MessageBrokerClie
 		Src:      message.Source,
 	}
 	msg, _ := json.MarshalIndent(shoppingMessage, "", "    ")
-	wsServer.Broadcast(message.Destination, msg)
+	s.WSServer.Broadcast(message.Destination, msg)
 
-	logInstance.InfoLogger.Info("Shopping message processed and broadcasted", "lot_id", lotID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
+	s.LogInstance.InfoLogger.Info("Shopping message processed and broadcasted", "lot_id", lotID, "client_id", clientID, "message", message.Text, "date", parsedDate.Format(customDateFormat))
 }
 
 func compareAnswers(correctAnswers []string, userAnswer string) bool {

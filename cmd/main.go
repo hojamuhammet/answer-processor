@@ -6,6 +6,7 @@ import (
 	"answers-processor/internal/infrastructure/message_broker"
 	"answers-processor/internal/infrastructure/rabbitmq"
 	"answers-processor/internal/repository"
+	"answers-processor/internal/service"
 	db "answers-processor/pkg/database"
 	"answers-processor/pkg/logger"
 	"log"
@@ -33,23 +34,19 @@ func main() {
 	}
 	defer dbInstance.Close()
 
-	message_broker, err := message_broker.NewMessageBrokerClient(cfg, logInstance)
+	messageBroker, err := message_broker.NewMessageBrokerClient(cfg, logInstance)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to create relay client", "error", err)
 		os.Exit(1)
 	}
 
-	quizWSServer := websocket.NewWebSocketServer()
-	votingWSServer := websocket.NewWebSocketServer()
-	shoppingWSServer := websocket.NewWebSocketServer()
+	wsServer := websocket.NewWebSocketServer()
 
-	go quizWSServer.HandleMessages()
-	go votingWSServer.HandleMessages()
-	go shoppingWSServer.HandleMessages()
+	go wsServer.HandleMessages()
 
-	http.HandleFunc("/ws/quiz", quizWSServer.HandleConnections)
-	http.HandleFunc("/ws/voting", votingWSServer.HandleConnections)
-	http.HandleFunc("/ws/shop", shoppingWSServer.HandleConnections)
+	http.HandleFunc("/ws/quiz", wsServer.HandleConnections)
+	http.HandleFunc("/ws/voting", wsServer.HandleConnections)
+	http.HandleFunc("/ws/shop", wsServer.HandleConnections)
 
 	go func() {
 		if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
@@ -64,6 +61,8 @@ func main() {
 	}
 	defer rabbitMQConn.Close()
 
+	serviceInstance := service.NewService(dbInstance, messageBroker, wsServer, logInstance)
+
 	logInstance.InfoLogger.Info("Starting to consume messages")
-	rabbitmq.ConsumeMessages(rabbitMQConn, dbInstance, message_broker, logInstance, quizWSServer, votingWSServer, shoppingWSServer)
+	rabbitmq.ConsumeMessages(rabbitMQConn, serviceInstance)
 }
