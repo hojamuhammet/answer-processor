@@ -35,7 +35,7 @@ func ProcessMessage(db *sql.DB, messageBroker *message_broker.MessageBrokerClien
 
 	accountType, err := repository.GetAccountType(db, message.Destination)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to get account type", "error", err)
+		logInstance.ErrorLogger.Error("Failed to get account type", "number", message.Destination)
 		return
 	}
 
