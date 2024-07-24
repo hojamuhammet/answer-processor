@@ -66,7 +66,7 @@ func (s *Service) ProcessMessage(message domain.SMSMessage) {
 		s.processQuiz(clientID, message, parsedDate)
 	case "voting":
 		s.processVoting(clientID, message, parsedDate)
-	case "shopping":
+	case "shop":
 		s.processShopping(clientID, message, parsedDate)
 	default:
 		s.LogInstance.ErrorLogger.Error("Unknown account type", "account_type", accountType)
