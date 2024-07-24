@@ -236,7 +236,7 @@ func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parse
 
 func (s *Service) processShopping(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
 	s.mu.Lock()
-	lotID, err := repository.GetLotDetailsByShortNumber(s.DB, message.Destination, parsedDate)
+	lotID, description, err := repository.GetLotDetailsByShortNumber(s.DB, message.Destination, parsedDate)
 	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
@@ -254,7 +254,7 @@ func (s *Service) processShopping(clientID int64, message domain.SMSMessage, par
 	s.LogInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
 	// Send message notification
-	err = s.MessageBroker.SendMessage(message.Destination, message.Source, "Shopping vote is accepted.")
+	err = s.MessageBroker.SendMessage(message.Destination, message.Source, description)
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
