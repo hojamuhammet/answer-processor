@@ -40,7 +40,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	wsServer := websocket.NewWebSocketServer()
+	wsServer := websocket.NewWebSocketServer(logInstance)
 
 	go wsServer.HandleMessages()
 
@@ -64,5 +64,5 @@ func main() {
 	serviceInstance := service.NewService(dbInstance, messageBroker, wsServer, logInstance)
 
 	logInstance.InfoLogger.Info("Starting to consume messages")
-	rabbitmq.ConsumeMessages(rabbitMQConn, serviceInstance)
+	rabbitmq.ConsumeMessages(cfg.RabbitMQ.URL, serviceInstance)
 }

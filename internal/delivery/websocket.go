@@ -1,6 +1,7 @@
 package delivery
 
 import (
+	"answers-processor/pkg/logger"
 	"net/http"
 	"sync"
 
@@ -12,6 +13,7 @@ type WebSocketServer struct {
 	broadcast chan BroadcastMessage
 	upgrader  websocket.Upgrader
 	mu        sync.Mutex
+	Log       *logger.Loggers
 }
 
 type BroadcastMessage struct {
@@ -19,7 +21,8 @@ type BroadcastMessage struct {
 	Message []byte
 }
 
-func NewWebSocketServer() *WebSocketServer {
+// NewWebSocketServer creates a new WebSocketServer instance.
+func NewWebSocketServer(logInstance *logger.Loggers) *WebSocketServer {
 	return &WebSocketServer{
 		clients:   make(map[*websocket.Conn]string),
 		broadcast: make(chan BroadcastMessage),
@@ -30,9 +33,11 @@ func NewWebSocketServer() *WebSocketServer {
 				return true
 			},
 		},
+		Log: logInstance,
 	}
 }
 
+// HandleConnections handles new WebSocket connections.
 func (server *WebSocketServer) HandleConnections(w http.ResponseWriter, r *http.Request) {
 	dst := r.URL.Query().Get("dst")
 	if dst == "" {
@@ -42,35 +47,53 @@ func (server *WebSocketServer) HandleConnections(w http.ResponseWriter, r *http.
 
 	ws, err := server.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		server.Log.ErrorLogger.Error("Failed to upgrade connection", "error", err)
 		return
 	}
-	defer ws.Close()
 
 	server.mu.Lock()
 	server.clients[ws] = dst
 	server.mu.Unlock()
 
+	server.Log.InfoLogger.Info("Client connected", "dst", dst)
+
+	go server.readPump(ws, dst)
+}
+
+// readPump reads messages from the WebSocket connection.
+func (server *WebSocketServer) readPump(conn *websocket.Conn, dst string) {
+	defer func() {
+		server.cleanupConnection(conn, dst)
+	}()
+
 	for {
-		_, _, err := ws.ReadMessage()
+		_, _, err := conn.ReadMessage()
 		if err != nil {
-			server.mu.Lock()
-			delete(server.clients, ws)
-			server.mu.Unlock()
-			break
+			server.Log.ErrorLogger.Error("Error reading message", "error", err)
+			return
 		}
 	}
 }
 
+// cleanupConnection handles the removal and logging of a disconnected WebSocket connection.
+func (server *WebSocketServer) cleanupConnection(conn *websocket.Conn, dst string) {
+	server.mu.Lock()
+	delete(server.clients, conn)
+	server.mu.Unlock()
+	conn.Close()
+	server.Log.InfoLogger.Info("Client disconnected", "dst", dst)
+}
+
+// HandleMessages listens for messages on the broadcast channel and sends them to clients.
 func (server *WebSocketServer) HandleMessages() {
-	for {
-		broadcastMessage := <-server.broadcast
+	for broadcastMessage := range server.broadcast {
 		server.mu.Lock()
 		for client, dst := range server.clients {
 			if dst == broadcastMessage.Dst {
 				err := client.WriteMessage(websocket.TextMessage, broadcastMessage.Message)
 				if err != nil {
-					client.Close()
-					delete(server.clients, client)
+					server.Log.ErrorLogger.Error("Failed to write message to client, closing connection", "dst", dst, "error", err)
+					server.cleanupConnection(client, dst)
 				}
 			}
 		}
@@ -78,6 +101,7 @@ func (server *WebSocketServer) HandleMessages() {
 	}
 }
 
+// Broadcast sends a message to the broadcast channel.
 func (server *WebSocketServer) Broadcast(dst string, message []byte) {
 	server.broadcast <- BroadcastMessage{Dst: dst, Message: message}
 }

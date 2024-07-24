@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,6 +19,7 @@ type Service struct {
 	MessageBroker *message_broker.MessageBrokerClient
 	WSServer      *websocket.WebSocketServer
 	LogInstance   *logger.Loggers
+	mu            sync.Mutex
 }
 
 const customDateFormat = "2006-01-02T15:04:05"
@@ -43,13 +45,17 @@ func (s *Service) ProcessMessage(message domain.SMSMessage) {
 		return
 	}
 
+	s.mu.Lock()
 	clientID, err := repository.InsertClientIfNotExists(s.DB, message.Source)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to insert or find client", "error", err)
 		return
 	}
 
+	s.mu.Lock()
 	accountType, err := repository.GetAccountType(s.DB, message.Destination)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to get account type", "number", message.Destination)
 		return
@@ -71,7 +77,9 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 	destination := message.Destination
 	text := message.Text
 
+	s.mu.Lock()
 	_, questions, questionIDs, quizID, err := repository.GetAccountAndQuestions(s.DB, destination, parsedDate)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to find quiz and questions", "error", err)
 		return
@@ -79,7 +87,9 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 
 	s.LogInstance.InfoLogger.Info("Quiz found", "quiz_id", quizID, "questions_count", len(questions))
 
+	s.mu.Lock()
 	scoredMap, err := repository.HasClientScoredBatch(s.DB, questionIDs, clientID)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to batch check if client has scored", "error", err)
 		return
@@ -87,7 +97,9 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 
 	for i := range questions {
 		questionID := questionIDs[i]
+		s.mu.Lock()
 		correctAnswers, err := repository.GetQuestionAnswers(s.DB, questionID)
+		s.mu.Unlock()
 		if err != nil {
 			s.LogInstance.ErrorLogger.Error("Failed to get question answers", "error", err)
 			continue
@@ -95,14 +107,18 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 
 		isCorrect := compareAnswers(correctAnswers, text)
 
+		s.mu.Lock()
 		serialNumber, err := repository.GetNextSerialNumber(s.DB, questionID)
+		s.mu.Unlock()
 		if err != nil {
 			s.LogInstance.ErrorLogger.Error("Failed to get next serial number", "error", err)
 			continue
 		}
 
 		if scoredMap[questionID] {
+			s.mu.Lock()
 			err = repository.InsertAnswer(s.DB, questionID, text, parsedDate, clientID, 0, serialNumber, 0)
+			s.mu.Unlock()
 			if err != nil {
 				s.LogInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 				continue
@@ -114,13 +130,17 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 		serialNumberForCorrect := 0
 		score := 0
 		if isCorrect {
+			s.mu.Lock()
 			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(s.DB, questionID)
+			s.mu.Unlock()
 			if err != nil {
 				s.LogInstance.ErrorLogger.Error("Failed to get next serial number for correct answers", "error", err)
 				continue
 			}
 
+			s.mu.Lock()
 			score, err = repository.GetQuestionScore(s.DB, questionID)
+			s.mu.Unlock()
 			if err != nil {
 				s.LogInstance.ErrorLogger.Error("Failed to get question score", "error", err)
 				continue
@@ -146,7 +166,9 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 			s.LogInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
 		}
 
+		s.mu.Lock()
 		err = repository.InsertAnswer(s.DB, questionID, text, parsedDate, clientID, score, serialNumber, serialNumberForCorrect)
+		s.mu.Unlock()
 		if err != nil {
 			s.LogInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
 			continue
@@ -156,19 +178,25 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 }
 
 func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
+	s.mu.Lock()
 	votingID, status, err := repository.GetVotingDetails(s.DB, message.Destination, parsedDate)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to find voting by short number and date", "error", err)
 		return
 	}
 
+	s.mu.Lock()
 	votingItemID, votingItemTitle, err := repository.GetVotingItemDetails(s.DB, votingID, message.Text)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to find voting item by vote code", "error", err)
 		return
 	}
 
+	s.mu.Lock()
 	hasVoted, err := repository.HasClientVoted(s.DB, votingID, clientID, status, parsedDate)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to check if client has voted", "error", err)
 		return
@@ -177,7 +205,9 @@ func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parse
 		return
 	}
 
+	s.mu.Lock()
 	err = repository.InsertVotingMessageAndUpdateCount(s.DB, votingID, votingItemID, message.Text, parsedDate, clientID)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to insert voting message and update count", "error", err)
 		return
@@ -205,13 +235,17 @@ func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parse
 }
 
 func (s *Service) processShopping(clientID int64, message domain.SMSMessage, parsedDate time.Time) {
+	s.mu.Lock()
 	lotID, err := repository.GetLotDetailsByShortNumber(s.DB, message.Destination, parsedDate)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to find lot by short number and date", "error", err)
 		return
 	}
 
+	s.mu.Lock()
 	err = repository.InsertLotMessageAndUpdate(s.DB, lotID, message.Text, parsedDate, clientID)
+	s.mu.Unlock()
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to insert lot SMS message and update", "error", err)
 		return
