@@ -12,8 +12,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-
-	_ "github.com/go-sql-driver/mysql"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -36,7 +36,7 @@ func main() {
 
 	messageBroker, err := message_broker.NewMessageBrokerClient(cfg, logInstance)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to create relay client", "error", err)
+		logInstance.ErrorLogger.Error("Failed to create message broker client", "error", err)
 		os.Exit(1)
 	}
 
@@ -54,15 +54,29 @@ func main() {
 		}
 	}()
 
-	rabbitMQConn, err := rabbitmq.NewConnection(cfg.RabbitMQ.URL)
+	rabbitMQClient, err := rabbitmq.NewRabbitMQClient(cfg.RabbitMQ.URL, logInstance)
 	if err != nil {
-		logInstance.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
+		logInstance.ErrorLogger.Error("Failed to initialize RabbitMQ client", "error", err)
 		os.Exit(1)
 	}
-	defer rabbitMQConn.Close()
+	defer rabbitMQClient.Close()
 
 	serviceInstance := service.NewService(dbInstance, messageBroker, wsServer, logInstance)
 
-	logInstance.InfoLogger.Info("Starting to consume messages")
-	rabbitmq.ConsumeMessages(cfg.RabbitMQ.URL, serviceInstance)
+	go func() {
+		logInstance.InfoLogger.Info("Starting to consume messages")
+		rabbitMQClient.ConsumeMessages(serviceInstance)
+	}()
+
+	// Handle graceful shutdown
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigs
+		logInstance.InfoLogger.Info("Shutting down gracefully...")
+		rabbitMQClient.Close()
+		os.Exit(0)
+	}()
+
+	select {}
 }

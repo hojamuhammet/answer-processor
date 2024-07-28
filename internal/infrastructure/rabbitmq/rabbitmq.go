@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"answers-processor/internal/domain"
 	"answers-processor/internal/service"
+	"answers-processor/pkg/logger"
 	"encoding/json"
 	"sync"
 	"time"
@@ -14,134 +15,139 @@ const (
 	reconnectDelay = 5 * time.Second
 )
 
-var (
-	connMutex sync.Mutex
-)
-
-// NewConnection establishes a new connection to RabbitMQ.
-func NewConnection(url string) (*amqp.Connection, error) {
-	return amqp.Dial(url)
+type RabbitMQClient struct {
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	url         string
+	logInstance *logger.Loggers
+	mu          sync.Mutex
+	closed      chan *amqp.Error
 }
 
-// ConsumeMessages manages message consumption and handles reconnection logic.
-func ConsumeMessages(url string, svc *service.Service) {
-	var wg sync.WaitGroup
-	reconnect := make(chan struct{})
-
-	go func() {
-		for range reconnect {
-			svc.LogInstance.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
-			for {
-				conn, err := reconnectRabbitMQ(url)
-				if err != nil {
-					svc.LogInstance.ErrorLogger.Error("Failed to reconnect to RabbitMQ, retrying...", "error", err)
-					time.Sleep(reconnectDelay)
-					continue
-				}
-				svc.LogInstance.InfoLogger.Info("Successfully reconnected to RabbitMQ")
-				startConsuming(conn, svc, &wg, reconnect)
-				break
-			}
-		}
-	}()
-
-	conn, err := NewConnection(url)
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
-		reconnect <- struct{}{}
-	} else {
-		startConsuming(conn, svc, &wg, reconnect)
+func NewRabbitMQClient(url string, logInstance *logger.Loggers) (*RabbitMQClient, error) {
+	client := &RabbitMQClient{
+		url:         url,
+		logInstance: logInstance,
+		closed:      make(chan *amqp.Error),
 	}
-
-	wg.Wait()
-}
-
-// startConsuming sets up RabbitMQ configurations and starts consuming messages.
-func startConsuming(conn *amqp.Connection, svc *service.Service, wg *sync.WaitGroup, reconnect chan struct{}) {
-	channel, err := conn.Channel()
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to open a channel", "error", err)
-		reconnect <- struct{}{}
-		return
-	}
-	defer channel.Close()
-
-	err = channel.ExchangeDeclare(
-		"sms.turkmentv", "direct", true, false, false, false, nil,
-	)
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to declare an exchange", "error", err)
-		reconnect <- struct{}{}
-		return
-	}
-
-	queue, err := channel.QueueDeclare(
-		"sms.turkmentv", true, false, false, false, nil,
-	)
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to declare a queue", "error", err)
-		reconnect <- struct{}{}
-		return
-	}
-
-	err = channel.QueueBind(
-		queue.Name, "", "sms.turkmentv", false, nil,
-	)
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to bind queue to exchange", "error", err)
-		reconnect <- struct{}{}
-		return
-	}
-
-	msgs, err := channel.Consume(
-		queue.Name, "", true, false, false, false, nil,
-	)
-	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to register a consumer", "error", err)
-		reconnect <- struct{}{}
-		return
-	}
-
-	forever := make(chan bool)
-
-	go func() {
-		for d := range msgs {
-			wg.Add(1)
-			go func(delivery amqp.Delivery) {
-				defer wg.Done()
-				processMessage(delivery, svc)
-			}(d)
-		}
-
-		svc.LogInstance.ErrorLogger.Error("Channel closed, initiating reconnection...")
-		reconnect <- struct{}{}
-	}()
-
-	<-forever
-}
-
-// reconnectRabbitMQ handles reconnection attempts to RabbitMQ with retries.
-func reconnectRabbitMQ(url string) (*amqp.Connection, error) {
-	connMutex.Lock()
-	defer connMutex.Unlock()
-
-	conn, err := NewConnection(url)
+	err := client.connect()
 	if err != nil {
 		return nil, err
 	}
-	return conn, nil
+	go client.handleReconnection()
+	return client, nil
 }
 
-// processMessage processes each received message.
-func processMessage(d amqp.Delivery, svc *service.Service) {
-	var smsMessage domain.SMSMessage
-	err := json.Unmarshal(d.Body, &smsMessage)
+func (c *RabbitMQClient) connect() error {
+	var err error
+	c.conn, err = amqp.Dial(c.url)
 	if err != nil {
-		svc.LogInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
-		return
+		c.logInstance.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
+		return err
 	}
 
-	svc.LogInstance.InfoLogger.Info("Received a message", "src", smsMessage.Source, "dst", smsMessage.Destination, "txt", smsMessage.Text, "date", smsMessage.Date, "parts", smsMessage.Parts)
+	c.channel, err = c.conn.Channel()
+	if err != nil {
+		c.logInstance.ErrorLogger.Error("Failed to open a channel", "error", err)
+		c.conn.Close()
+		return err
+	}
 
-	svc.ProcessMessage(smsMessage)
+	err = c.setupChannel()
+	if err != nil {
+		c.logInstance.ErrorLogger.Error("Failed to set up channel", "error", err)
+		c.channel.Close()
+		c.conn.Close()
+		return err
+	}
+
+	c.closed = c.channel.NotifyClose(make(chan *amqp.Error))
+
+	return nil
+}
+
+func (c *RabbitMQClient) setupChannel() error {
+	err := c.channel.ExchangeDeclare(
+		"sms.turkmentv", "direct", true, false, false, false, nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.channel.QueueDeclare(
+		"sms.turkmentv", true, false, false, false, nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = c.channel.QueueBind(
+		"sms.turkmentv", "", "sms.turkmentv", false, nil,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *RabbitMQClient) handleReconnection() {
+	for err := range c.closed {
+		if err != nil {
+			c.logInstance.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+			for {
+				time.Sleep(reconnectDelay)
+				c.mu.Lock()
+				err := c.connect()
+				c.mu.Unlock()
+				if err == nil {
+					c.logInstance.InfoLogger.Info("Successfully reconnected to RabbitMQ")
+					break
+				}
+				c.logInstance.ErrorLogger.Error("Failed to reconnect to RabbitMQ", "error", err)
+			}
+		}
+	}
+}
+
+func (c *RabbitMQClient) ConsumeMessages(service *service.Service) {
+	for {
+		c.mu.Lock()
+		msgs, err := c.channel.Consume(
+			"sms.turkmentv", "", true, false, false, false, nil,
+		)
+		c.mu.Unlock()
+
+		if err != nil {
+			c.logInstance.ErrorLogger.Error("Failed to register a consumer", "error", err)
+			time.Sleep(reconnectDelay)
+			continue
+		}
+
+		for d := range msgs {
+			var smsMessage domain.SMSMessage
+			err := json.Unmarshal(d.Body, &smsMessage)
+			if err != nil {
+				c.logInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
+				continue
+			}
+
+			c.logInstance.InfoLogger.Info("Received a message", "src", smsMessage.Source, "dst", smsMessage.Destination, "txt", smsMessage.Text, "date", smsMessage.Date, "parts", smsMessage.Parts)
+
+			service.ProcessMessage(smsMessage)
+		}
+
+		c.logInstance.ErrorLogger.Error("Message channel closed, attempting to reconnect")
+	}
+}
+
+func (c *RabbitMQClient) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.channel != nil {
+		c.channel.Close()
+	}
+	if c.conn != nil {
+		c.conn.Close()
+	}
 }

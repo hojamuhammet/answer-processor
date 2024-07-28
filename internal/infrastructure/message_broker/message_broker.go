@@ -20,7 +20,7 @@ const (
 
 type MessageBrokerClient struct {
 	conn     *amqp.Connection
-	Channel  *amqp.Channel
+	channel  *amqp.Channel
 	Logger   *logger.Loggers
 	Queue    string
 	mu       sync.Mutex
@@ -28,7 +28,6 @@ type MessageBrokerClient struct {
 	isClosed bool
 }
 
-// NewMessageBrokerClient initializes a new MessageBrokerClient and connects to RabbitMQ.
 func NewMessageBrokerClient(cfg *config.Config, loggers *logger.Loggers) (*MessageBrokerClient, error) {
 	client := &MessageBrokerClient{
 		Logger: loggers,
@@ -39,25 +38,29 @@ func NewMessageBrokerClient(cfg *config.Config, loggers *logger.Loggers) (*Messa
 	if err != nil {
 		return nil, err
 	}
+	go client.handleReconnection()
 	return client, nil
 }
 
-// connect establishes a connection to RabbitMQ and opens a channel.
 func (c *MessageBrokerClient) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	conn, err := amqp.Dial(c.url)
+	var err error
+	c.conn, err = amqp.Dial(c.url)
 	if err != nil {
 		c.Logger.ErrorLogger.Error("Failed to connect to RabbitMQ", "error", err)
 		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
-	ch, err := conn.Channel()
+
+	c.channel, err = c.conn.Channel()
 	if err != nil {
 		c.Logger.ErrorLogger.Error("Failed to open a channel", "error", err)
+		c.conn.Close()
 		return fmt.Errorf("failed to open a channel: %w", err)
 	}
-	_, err = ch.QueueDeclare(
+
+	_, err = c.channel.QueueDeclare(
 		c.Queue,
 		true,
 		false,
@@ -70,52 +73,43 @@ func (c *MessageBrokerClient) connect() error {
 		return fmt.Errorf("failed to declare a queue: %w", err)
 	}
 
-	c.conn = conn
-	c.Channel = ch
 	c.isClosed = false
-
-	go c.handleReconnection()
+	c.channel.NotifyClose(make(chan *amqp.Error))
 
 	return nil
 }
 
-// handleReconnection listens for connection closure and attempts to reconnect.
 func (c *MessageBrokerClient) handleReconnection() {
 	reconnect := make(chan *amqp.Error)
 	c.conn.NotifyClose(reconnect)
 
-	go func() {
-		for err := range reconnect {
-			if err != nil && !c.isClosed {
-				c.Logger.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
-				for {
-					time.Sleep(ReconnectDelay)
-					c.mu.Lock()
-					if c.isClosed {
-						c.mu.Unlock()
-						return
-					}
-					err := c.connect()
-					if err != nil {
-						c.Logger.ErrorLogger.Error("Failed to reconnect to RabbitMQ", "error", err)
-						c.mu.Unlock()
-						continue
-					}
-					c.Logger.InfoLogger.Info("Successfully reconnected to RabbitMQ")
+	for err := range reconnect {
+		if err != nil && !c.isClosed {
+			c.Logger.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+			for {
+				time.Sleep(ReconnectDelay)
+				c.mu.Lock()
+				if c.isClosed {
 					c.mu.Unlock()
+					return
+				}
+				err := c.connect()
+				c.mu.Unlock()
+				if err == nil {
+					c.Logger.InfoLogger.Info("Successfully reconnected to RabbitMQ")
 					break
 				}
+				c.Logger.ErrorLogger.Error("Failed to reconnect to RabbitMQ", "error", err)
 			}
 		}
-	}()
+	}
 }
 
-// Close safely closes the connection and channel.
 func (c *MessageBrokerClient) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isClosed = true
-	if err := c.Channel.Close(); err != nil {
+	if err := c.channel.Close(); err != nil {
 		c.Logger.ErrorLogger.Error("Failed to close channel", "error", err)
 	}
 	if err := c.conn.Close(); err != nil {
@@ -123,7 +117,6 @@ func (c *MessageBrokerClient) Close() {
 	}
 }
 
-// SendMessage sends a message to RabbitMQ with retries.
 func (c *MessageBrokerClient) SendMessage(src, dest, text string) error {
 	c.Logger.InfoLogger.Info("Sending message via RabbitMQ", "src", src, "dst", dest, "text", text)
 
@@ -141,7 +134,7 @@ func (c *MessageBrokerClient) SendMessage(src, dest, text string) error {
 
 	for attempt := 0; attempt < MaxRetries; attempt++ {
 		c.mu.Lock()
-		err = c.Channel.Publish(
+		err = c.channel.Publish(
 			"",      // exchange
 			c.Queue, // routing key
 			false,   // mandatory
