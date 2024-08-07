@@ -1,12 +1,13 @@
-package rabbitmq_consumer
+package consumer
 
 import (
-	"answers-processor/internal/domain"
-	"answers-processor/internal/service"
-	"answers-processor/pkg/logger"
 	"encoding/json"
 	"sync"
 	"time"
+
+	"answers-processor/internal/domain"
+	"answers-processor/internal/service"
+	"answers-processor/pkg/logger"
 
 	"github.com/streadway/amqp"
 )
@@ -15,7 +16,8 @@ const (
 	reconnectDelay = 5 * time.Second
 )
 
-type RabbitMQClient struct {
+// RabbitMQConsumer handles consuming messages from RabbitMQ.
+type RabbitMQConsumer struct {
 	conn           *amqp.Connection
 	channel        *amqp.Channel
 	url            string
@@ -25,17 +27,20 @@ type RabbitMQClient struct {
 	logInstance    *logger.Loggers
 	mu             sync.Mutex
 	isShuttingDown bool
-	service        *service.Service
+	done           chan struct{}
+	handler        func(amqp.Delivery)
+	reconnecting   bool
 }
 
-func NewRabbitMQClient(url, exchange, queue, routingKey string, logInstance *logger.Loggers, service *service.Service) (*RabbitMQClient, error) {
-	client := &RabbitMQClient{
+// NewRabbitMQConsumer initializes a new RabbitMQConsumer.
+func NewRabbitMQConsumer(url, exchange, queue, routingKey string, logInstance *logger.Loggers, service *service.Service) (*RabbitMQConsumer, error) {
+	client := &RabbitMQConsumer{
 		url:         url,
 		exchange:    exchange,
 		queue:       queue,
 		routingKey:  routingKey,
 		logInstance: logInstance,
-		service:     service,
+		done:        make(chan struct{}),
 	}
 
 	if err := client.connect(); err != nil {
@@ -47,13 +52,13 @@ func NewRabbitMQClient(url, exchange, queue, routingKey string, logInstance *log
 	return client, nil
 }
 
-func (c *RabbitMQClient) connect() error {
+// Connection
+
+func (c *RabbitMQConsumer) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.conn != nil && !c.conn.IsClosed() {
-		c.conn.Close()
-	}
+	c.cleanupConnection()
 
 	var err error
 	c.conn, err = amqp.Dial(c.url)
@@ -79,95 +84,144 @@ func (c *RabbitMQClient) connect() error {
 	return nil
 }
 
-func (c *RabbitMQClient) monitorConnection() {
+// Logic
+
+func (c *RabbitMQConsumer) ConsumeMessages(service *service.Service) {
+	c.handler = func(msg amqp.Delivery) {
+		var smsMessage domain.SMSMessage
+		if err := json.Unmarshal(msg.Body, &smsMessage); err != nil {
+			c.logInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
+			return
+		}
+
+		service.ProcessMessage(smsMessage)
+	}
+	c.consumeMessages(c.handler, c.done)
+}
+
+func (c *RabbitMQConsumer) consumeMessages(handler func(amqp.Delivery), done <-chan struct{}) {
+	msgs, err := c.channel.Consume(
+		c.queue,
+		"",
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		c.logInstance.ErrorLogger.Error("Failed to start consuming messages", "error", err)
+		c.reconnect()
+		return
+	}
+
 	for {
 		select {
-		case err := <-c.conn.NotifyClose(make(chan *amqp.Error)):
-			if err != nil && !c.isShuttingDown {
-				c.logInstance.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+		case msg, ok := <-msgs:
+			if !ok {
+				c.logInstance.ErrorLogger.Error("Message channel closed, attempting to reconnect")
 				c.reconnect()
+				return
 			}
-		case err := <-c.channel.NotifyClose(make(chan *amqp.Error)):
-			if err != nil && !c.isShuttingDown {
-				c.logInstance.ErrorLogger.Error("RabbitMQ channel closed", "error", err)
-				c.reconnect()
-			}
+			handler(msg)
+		case <-done:
+			return
 		}
 	}
 }
 
-func (c *RabbitMQClient) reconnect() {
+// Reconnection
+
+func (c *RabbitMQConsumer) monitorConnection() {
 	for {
-		c.cleanupConnection()
-
-		if err := c.connect(); err == nil {
-			c.logInstance.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
-			go c.ConsumeMessages(c.service)
-			return
-		}
-
-		c.logInstance.ErrorLogger.Error("Reconnection attempt failed, retrying...")
-		time.Sleep(reconnectDelay)
-	}
-}
-
-func (c *RabbitMQClient) ConsumeMessages(service *service.Service) {
-	for {
-		if c.isShuttingDown {
-			return
-		}
 		c.mu.Lock()
-		msgs, err := c.channel.Consume(
-			c.queue,
-			"",
-			true,
-			false,
-			false,
-			false,
-			nil,
-		)
+		conn := c.conn
 		c.mu.Unlock()
 
-		if err != nil {
-			if !c.isShuttingDown {
-				c.logInstance.ErrorLogger.Error("Failed to register a consumer", "error", err)
-			}
-			c.reconnect()
+		if conn == nil {
+			c.logInstance.ErrorLogger.Error("Connection is nil, waiting to retry monitorConnection...")
+			time.Sleep(reconnectDelay)
 			continue
 		}
 
-		for d := range msgs {
-			var smsMessage domain.SMSMessage
-			err := json.Unmarshal(d.Body, &smsMessage)
+		select {
+		case err := <-conn.NotifyClose(make(chan *amqp.Error)):
 			if err != nil {
-				c.logInstance.ErrorLogger.Error("Failed to unmarshal message", "error", err)
-				continue
+				c.logInstance.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+				c.reconnect()
+			}
+		case <-c.done:
+			return
+		}
+	}
+}
+
+func (c *RabbitMQConsumer) reconnect() {
+	c.mu.Lock()
+	if c.reconnecting {
+		c.mu.Unlock()
+		return
+	}
+	c.reconnecting = true
+	c.mu.Unlock()
+
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			c.reconnecting = false
+			c.mu.Unlock()
+		}()
+
+		for {
+			if c.isShuttingDown {
+				return
+			}
+			c.logInstance.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
+			if err := c.connect(); err == nil {
+				c.logInstance.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+				c.consumeMessages(c.handler, c.done)
+				return
 			}
 
-			c.logInstance.InfoLogger.Info("Received a message", "src", smsMessage.Source, "dst", smsMessage.Destination, "txt", smsMessage.Text, "date", smsMessage.Date, "parts", smsMessage.Parts)
-			service.ProcessMessage(smsMessage)
+			c.logInstance.ErrorLogger.Error("Reconnection attempt failed, retrying...")
+			time.Sleep(reconnectDelay)
 		}
-
-		if !c.isShuttingDown {
-			c.logInstance.ErrorLogger.Error("Message channel closed, attempting to reconnect")
-		}
-		c.reconnect()
-	}
+	}()
 }
 
-func (c *RabbitMQClient) cleanupConnection() {
-	if c.channel != nil {
-		c.channel.Close()
+func (c *RabbitMQConsumer) NotifyClose() <-chan *amqp.Error {
+	if c.conn == nil {
+		return nil
 	}
-	if c.conn != nil {
-		c.conn.Close()
-	}
+	return c.conn.NotifyClose(make(chan *amqp.Error))
 }
 
-func (c *RabbitMQClient) Close() {
+func (c *RabbitMQConsumer) IsConnected() bool {
+	return c.conn != nil && !c.conn.IsClosed()
+}
+
+func (c *RabbitMQConsumer) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.isShuttingDown = true
+
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+
 	c.cleanupConnection()
 	c.logInstance.InfoLogger.Info("RabbitMQ connection and channel closed")
+}
+
+func (c *RabbitMQConsumer) cleanupConnection() {
+	if c.channel != nil {
+		c.channel.Close()
+		c.channel = nil
+	}
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
 }

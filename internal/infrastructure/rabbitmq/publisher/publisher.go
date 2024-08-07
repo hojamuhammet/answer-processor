@@ -17,6 +17,7 @@ const (
 	ReconnectDelay = 5 * time.Second
 )
 
+// PublisherClient handles publishing messages to RabbitMQ.
 type PublisherClient struct {
 	conn       *amqp.Connection
 	channel    *amqp.Channel
@@ -26,8 +27,10 @@ type PublisherClient struct {
 	routingKey string
 	url        string
 	mu         sync.Mutex
+	done       chan struct{}
 }
 
+// NewPublisherClient initializes a new PublisherClient.
 func NewPublisherClient(cfg *config.Config, loggers *logger.Loggers) (*PublisherClient, error) {
 	client := &PublisherClient{
 		Logger:     loggers,
@@ -35,6 +38,7 @@ func NewPublisherClient(cfg *config.Config, loggers *logger.Loggers) (*Publisher
 		queue:      cfg.RabbitMQ.Publisher.QueueName,
 		routingKey: cfg.RabbitMQ.Publisher.RoutingKey,
 		url:        cfg.RabbitMQ.URL,
+		done:       make(chan struct{}),
 	}
 
 	if err := client.connect(); err != nil {
@@ -46,13 +50,11 @@ func NewPublisherClient(cfg *config.Config, loggers *logger.Loggers) (*Publisher
 	return client, nil
 }
 
+// Connection
+
 func (c *PublisherClient) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if c.conn != nil && !c.conn.IsClosed() {
-		c.conn.Close()
-	}
 
 	var err error
 	c.conn, err = amqp.Dial(c.url)
@@ -112,39 +114,11 @@ func (c *PublisherClient) setupChannel() error {
 		return err
 	}
 
+	c.Logger.InfoLogger.Info("Queue, exchange, and channel setup completed successfully.")
 	return nil
 }
 
-func (c *PublisherClient) monitorConnection() {
-	for {
-		select {
-		case err := <-c.conn.NotifyClose(make(chan *amqp.Error)):
-			if err != nil {
-				c.Logger.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
-				c.reconnect()
-			}
-		case err := <-c.channel.NotifyClose(make(chan *amqp.Error)):
-			if err != nil {
-				c.Logger.ErrorLogger.Error("RabbitMQ channel closed", "error", err)
-				c.reconnect()
-			}
-		}
-	}
-}
-
-func (c *PublisherClient) reconnect() {
-	for {
-		c.cleanupConnection()
-
-		if err := c.connect(); err == nil {
-			c.Logger.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
-			return
-		}
-
-		c.Logger.ErrorLogger.Error("Reconnection attempt failed, retrying...")
-		time.Sleep(ReconnectDelay)
-	}
-}
+// Logic
 
 func (c *PublisherClient) SendMessage(src, dest, text string) error {
 	message := domain.RelayMessage{
@@ -183,13 +157,66 @@ func (c *PublisherClient) SendMessage(src, dest, text string) error {
 	}
 }
 
-func (c *PublisherClient) cleanupConnection() {
-	if c.channel != nil {
-		c.channel.Close()
+// Reconnection
+
+func (c *PublisherClient) monitorConnection() {
+	for {
+		c.mu.Lock()
+		conn := c.conn
+		c.mu.Unlock()
+
+		if conn == nil {
+			c.Logger.ErrorLogger.Error("Connection is nil, waiting to retry monitorConnection...")
+			time.Sleep(ReconnectDelay)
+			continue
+		}
+
+		select {
+		case err := <-conn.NotifyClose(make(chan *amqp.Error)):
+			if err != nil {
+				c.Logger.ErrorLogger.Error("RabbitMQ connection closed", "error", err)
+				c.reconnect()
+			}
+		case err := <-c.channel.NotifyClose(make(chan *amqp.Error)):
+			if err != nil {
+				c.Logger.ErrorLogger.Error("RabbitMQ channel closed", "error", err)
+				c.reconnect()
+			}
+		}
 	}
-	if c.conn != nil {
-		c.conn.Close()
+}
+
+func (c *PublisherClient) reconnect() {
+	c.mu.Lock()
+	if c.conn != nil && !c.conn.IsClosed() {
+		c.mu.Unlock()
+		return
 	}
+	c.mu.Unlock()
+
+	go func() {
+		for {
+			c.Logger.InfoLogger.Info("Attempting to reconnect to RabbitMQ...")
+			if err := c.connect(); err == nil {
+				c.Logger.InfoLogger.Info("Successfully reconnected to RabbitMQ.")
+				return
+			}
+
+			c.Logger.ErrorLogger.Error("Reconnection attempt failed, retrying...")
+			time.Sleep(ReconnectDelay)
+		}
+	}()
+}
+
+func (c *PublisherClient) NotifyClose() <-chan *amqp.Error {
+	if c.conn == nil {
+		return nil
+	}
+	return c.conn.NotifyClose(make(chan *amqp.Error))
+}
+
+func (c *PublisherClient) IsConnected() bool {
+	return c.conn != nil && !c.conn.IsClosed()
 }
 
 func (c *PublisherClient) Close() {
@@ -197,4 +224,13 @@ func (c *PublisherClient) Close() {
 	defer c.mu.Unlock()
 	c.cleanupConnection()
 	c.Logger.InfoLogger.Info("RabbitMQ connection and channel closed")
+}
+
+func (c *PublisherClient) cleanupConnection() {
+	if c.channel != nil {
+		c.channel.Close()
+	}
+	if c.conn != nil {
+		c.conn.Close()
+	}
 }
