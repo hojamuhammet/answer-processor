@@ -3,7 +3,7 @@ package service
 import (
 	websocket "answers-processor/internal/delivery"
 	"answers-processor/internal/domain"
-	"answers-processor/internal/infrastructure/message_broker"
+	publisher "answers-processor/internal/infrastructure/rabbitmq/publisher"
 	"answers-processor/internal/repository"
 	"answers-processor/pkg/logger"
 	"answers-processor/pkg/utils"
@@ -15,21 +15,21 @@ import (
 )
 
 type Service struct {
-	DB            *sql.DB
-	MessageBroker *message_broker.MessageBrokerClient
-	WSServer      *websocket.WebSocketServer
-	LogInstance   *logger.Loggers
-	mu            sync.Mutex
+	DB          *sql.DB
+	Publisher   *publisher.PublisherClient
+	WSServer    *websocket.WebSocketServer
+	LogInstance *logger.Loggers
+	mu          sync.Mutex
 }
 
 const customDateFormat = "2006-01-02T15:04:05"
 
-func NewService(db *sql.DB, messageBroker *message_broker.MessageBrokerClient, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) *Service {
+func NewService(db *sql.DB, publisher *publisher.PublisherClient, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) *Service {
 	return &Service{
-		DB:            db,
-		MessageBroker: messageBroker,
-		WSServer:      wsServer,
-		LogInstance:   logInstance,
+		DB:          db,
+		Publisher:   publisher,
+		WSServer:    wsServer,
+		LogInstance: logInstance,
 	}
 }
 
@@ -214,7 +214,7 @@ func (s *Service) processVoting(clientID int64, message domain.SMSMessage, parse
 	}
 
 	smsText := votingItemTitle + " ucin beren sesiniz kabul edildi"
-	err = s.MessageBroker.SendMessage(message.Destination, message.Source, smsText)
+	err = s.Publisher.SendMessage(message.Destination, message.Source, smsText)
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {
@@ -254,7 +254,7 @@ func (s *Service) processShopping(clientID int64, message domain.SMSMessage, par
 	s.LogInstance.InfoLogger.Info("Message recorded successfully", "lot_id", lotID, "client_id", clientID)
 
 	// Send message notification
-	err = s.MessageBroker.SendMessage(message.Destination, message.Source, description)
+	err = s.Publisher.SendMessage(message.Destination, message.Source, description)
 	if err != nil {
 		s.LogInstance.ErrorLogger.Error("Failed to send message notification", "error", err)
 	} else {

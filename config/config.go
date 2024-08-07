@@ -19,7 +19,15 @@ type Database struct {
 }
 
 type RabbitMQ struct {
-	URL string `yaml:"url"`
+	URL       string      `yaml:"url"`
+	Consumer  RabbitMQKey `yaml:"consumer"`
+	Publisher RabbitMQKey `yaml:"publisher"`
+}
+
+type RabbitMQKey struct {
+	ExchangeName string `yaml:"exchange_name"`
+	QueueName    string `yaml:"queue_name"`
+	RoutingKey   string `yaml:"routing_key"`
 }
 
 type SMPP struct {

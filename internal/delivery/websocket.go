@@ -105,3 +105,21 @@ func (server *WebSocketServer) HandleMessages() {
 func (server *WebSocketServer) Broadcast(dst string, message []byte) {
 	server.broadcast <- BroadcastMessage{Dst: dst, Message: message}
 }
+
+// Shutdown gracefully closes all WebSocket connections
+func (server *WebSocketServer) Shutdown() {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	for client := range server.clients {
+		err := client.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "Server shutting down"))
+		if err != nil {
+			server.Log.ErrorLogger.Error("Error sending close message", "error", err)
+		}
+		client.Close()
+		delete(server.clients, client)
+	}
+
+	close(server.broadcast) // Close the broadcast channel
+	server.Log.InfoLogger.Info("WebSocket server shut down gracefully")
+}
