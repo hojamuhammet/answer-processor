@@ -84,8 +84,8 @@ func (c *RabbitMQConsumer) connect() error {
 }
 
 func (c *RabbitMQConsumer) resetNotifyChannels() {
-	c.notifyConnClose = make(chan *amqp.Error)
-	c.notifyChanClose = make(chan *amqp.Error)
+	c.notifyConnClose = make(chan *amqp.Error, 1)
+	c.notifyChanClose = make(chan *amqp.Error, 1)
 	c.conn.NotifyClose(c.notifyConnClose)
 	c.channel.NotifyClose(c.notifyChanClose)
 }
@@ -181,7 +181,6 @@ func (c *RabbitMQConsumer) reconnect() {
 			if err := c.connect(); err == nil {
 				c.logInstance.InfoLogger.Info("Successfully reconnected RabbitMQ consumer.")
 				c.consumeMessages(c.handler)
-				// Make sure to reset and restart monitoring after reconnection
 				go c.monitorConnection()
 				return
 			}
