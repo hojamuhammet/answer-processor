@@ -73,12 +73,6 @@ func main() {
 	http.HandleFunc("/ws/shop", wsServer.HandleConnections)
 
 	go func() {
-		if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
-			logInstance.ErrorLogger.Error("WebSocket server failed", "error", err)
-		}
-	}()
-
-	go func() {
 		logInstance.InfoLogger.Info("Starting to consume messages from RabbitMQ")
 		rabbitmqConsumer.ConsumeMessages(serviceInstance)
 	}()
