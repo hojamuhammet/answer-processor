@@ -17,7 +17,7 @@ const (
 	ReconnectDelay = 5 * time.Second
 )
 
-type PublisherClient struct {
+type RabbitmqPublisher struct {
 	conn            *amqp.Connection
 	channel         *amqp.Channel
 	Logger          *logger.Loggers
@@ -32,9 +32,8 @@ type PublisherClient struct {
 	notifyChanClose chan *amqp.Error
 }
 
-// NewPublisherClient initializes a new PublisherClient.
-func NewPublisherClient(cfg *config.Config, loggers *logger.Loggers) (*PublisherClient, error) {
-	client := &PublisherClient{
+func NewRabbitmqPublisher(cfg *config.Config, loggers *logger.Loggers) (*RabbitmqPublisher, error) {
+	client := &RabbitmqPublisher{
 		Logger:     loggers,
 		exchange:   cfg.RabbitMQ.Publisher.ExchangeName,
 		queue:      cfg.RabbitMQ.Publisher.QueueName,
@@ -54,7 +53,7 @@ func NewPublisherClient(cfg *config.Config, loggers *logger.Loggers) (*Publisher
 
 // Connection
 
-func (c *PublisherClient) connect() error {
+func (c *RabbitmqPublisher) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -90,7 +89,7 @@ func (c *PublisherClient) connect() error {
 	return nil
 }
 
-func (c *PublisherClient) setupChannel() error {
+func (c *RabbitmqPublisher) setupChannel() error {
 	if err := c.channel.ExchangeDeclare(
 		c.exchange,
 		"direct",
@@ -130,7 +129,7 @@ func (c *PublisherClient) setupChannel() error {
 
 // Logic
 
-func (c *PublisherClient) SendMessage(src, dest, text string) error {
+func (c *RabbitmqPublisher) SendMessage(src, dest, text string) error {
 	message := domain.RelayMessage{
 		Src: src,
 		Dst: dest,
@@ -169,7 +168,7 @@ func (c *PublisherClient) SendMessage(src, dest, text string) error {
 
 // Reconnection
 
-func (c *PublisherClient) monitorConnection() {
+func (c *RabbitmqPublisher) monitorConnection() {
 	for {
 		select {
 		case err := <-c.notifyConnClose:
@@ -188,7 +187,7 @@ func (c *PublisherClient) monitorConnection() {
 	}
 }
 
-func (c *PublisherClient) reconnect() {
+func (c *RabbitmqPublisher) reconnect() {
 	c.mu.Lock()
 	if c.reconnecting {
 		c.mu.Unlock()
@@ -227,7 +226,7 @@ func (c *PublisherClient) reconnect() {
 	}()
 }
 
-func (c *PublisherClient) Close() {
+func (c *RabbitmqPublisher) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -240,7 +239,7 @@ func (c *PublisherClient) Close() {
 	c.Logger.InfoLogger.Info("RabbitMQ publisher connection and channel closed")
 }
 
-func (c *PublisherClient) cleanupConnection() {
+func (c *RabbitmqPublisher) cleanupConnection() {
 	if c.channel != nil {
 		c.channel.Close()
 	}

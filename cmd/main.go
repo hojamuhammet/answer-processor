@@ -41,7 +41,7 @@ func main() {
 	wsServer := websocket.NewWebSocketServer(logInstance)
 	logInstance.InfoLogger.Info("WebSocket server initialized.")
 
-	rabbitmqPublisher, err := publisher.NewPublisherClient(cfg, logInstance)
+	rabbitmqPublisher, err := publisher.NewRabbitmqPublisher(cfg, logInstance)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to create RabbitMQ publisher client", "error", err)
 		os.Exit(1)
@@ -80,7 +80,7 @@ func main() {
 	handleGracefulShutdown(rabbitmqConsumer, rabbitmqPublisher, wsServer, logInstance)
 }
 
-func handleGracefulShutdown(rabbitmqConsumer *consumer.RabbitMQConsumer, rabbitmqPublisher *publisher.PublisherClient, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) {
+func handleGracefulShutdown(rabbitmqConsumer *consumer.RabbitMQConsumer, rabbitmqPublisher *publisher.RabbitmqPublisher, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 

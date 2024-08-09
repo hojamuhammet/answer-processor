@@ -16,7 +16,7 @@ import (
 
 type Service struct {
 	DB          *sql.DB
-	Publisher   *publisher.PublisherClient
+	Publisher   *publisher.RabbitmqPublisher
 	WSServer    *websocket.WebSocketServer
 	LogInstance *logger.Loggers
 	mu          sync.Mutex
@@ -24,7 +24,7 @@ type Service struct {
 
 const customDateFormat = "2006-01-02T15:04:05"
 
-func NewService(db *sql.DB, publisher *publisher.PublisherClient, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) *Service {
+func NewService(db *sql.DB, publisher *publisher.RabbitmqPublisher, wsServer *websocket.WebSocketServer, logInstance *logger.Loggers) *Service {
 	return &Service{
 		DB:          db,
 		Publisher:   publisher,
