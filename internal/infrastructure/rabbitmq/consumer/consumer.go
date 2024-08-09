@@ -140,12 +140,12 @@ func (c *RabbitMQConsumer) monitorConnection() {
 		case err := <-c.notifyConnClose:
 			if err != nil {
 				c.logInstance.ErrorLogger.Error("RabbitMQ consumer connection closed", "error", err)
-				c.reconnect()
+				go c.reconnect()
 			}
 		case err := <-c.notifyChanClose:
 			if err != nil {
 				c.logInstance.ErrorLogger.Error("RabbitMQ consumer channel closed", "error", err)
-				c.reconnect()
+				go c.reconnect()
 			}
 		case <-c.done:
 			return
@@ -180,8 +180,8 @@ func (c *RabbitMQConsumer) reconnect() {
 
 			if err := c.connect(); err == nil {
 				c.logInstance.InfoLogger.Info("Successfully reconnected RabbitMQ consumer.")
-				c.consumeMessages(c.handler)
-				go c.monitorConnection()
+				go c.consumeMessages(c.handler) // Ensure consuming resumes after reconnection
+				go c.monitorConnection()        // Restart monitoring after reconnect
 				return
 			}
 
