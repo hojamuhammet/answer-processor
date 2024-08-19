@@ -115,21 +115,10 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 			continue
 		}
 
-		if scoredMap[questionID] {
-			s.mu.Lock()
-			err = repository.InsertAnswer(s.DB, questionID, text, parsedDate, clientID, 0, serialNumber, 0)
-			s.mu.Unlock()
-			if err != nil {
-				s.LogInstance.ErrorLogger.Error("Failed to insert answer", "error", err)
-				continue
-			}
-			s.LogInstance.InfoLogger.Info("Answer inserted for previously correctly answered question", "question_id", questionID, "serial_number", serialNumber)
-			continue
-		}
-
+		var score int
 		serialNumberForCorrect := 0
-		score := 0
-		if isCorrect {
+
+		if isCorrect && !scoredMap[questionID] {
 			s.mu.Lock()
 			serialNumberForCorrect, err = repository.GetNextSerialNumberForCorrect(s.DB, questionID)
 			s.mu.Unlock()
@@ -161,9 +150,9 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 			msg, _ := json.MarshalIndent(correctAnswerMessage, "", "    ")
 			s.WSServer.Broadcast(destination, msg)
 
-			scoredMap[questionID] = true
-
 			s.LogInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
+		} else if !isCorrect || scoredMap[questionID] {
+			score = 0 // Do not award points for incorrect or subsequent correct answers
 		}
 
 		s.mu.Lock()
