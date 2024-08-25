@@ -19,16 +19,20 @@ import (
 )
 
 func main() {
+	// Load the configuration
 	cfg := config.LoadConfig()
 
+	// Set up the logger
 	logInstance, err := logger.SetupLogger(cfg.Env)
 	if err != nil {
 		log.Fatalf("Failed to set up logger: %v", err)
 		os.Exit(1)
 	}
 
+	// Initialize the repository
 	repository.Init(logInstance)
 
+	// Connect to the database
 	dbInstance, err := db.NewDatabase(cfg.Database.Addr)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to connect to MySQL", "error", err)
@@ -38,9 +42,11 @@ func main() {
 
 	logInstance.InfoLogger.Info("Database connection successfully established.")
 
+	// Initialize the WebSocket server
 	wsServer := websocket.NewWebSocketServer(logInstance)
 	logInstance.InfoLogger.Info("WebSocket server initialized.")
 
+	// Initialize RabbitMQ publisher
 	rabbitmqPublisher, err := publisher.NewRabbitmqPublisher(cfg, logInstance)
 	if err != nil {
 		logInstance.ErrorLogger.Error("Failed to create RabbitMQ publisher client", "error", err)
@@ -48,8 +54,10 @@ func main() {
 	}
 	defer rabbitmqPublisher.Close()
 
+	// Initialize the service with the database, publisher, and WebSocket server
 	serviceInstance := service.NewService(dbInstance, rabbitmqPublisher, wsServer, logInstance)
 
+	// Initialize RabbitMQ consumer
 	rabbitmqConsumer, err := consumer.NewRabbitMQConsumer(
 		cfg.RabbitMQ.URL,
 		cfg.RabbitMQ.Consumer.ExchangeName,
@@ -77,6 +85,13 @@ func main() {
 		rabbitmqConsumer.ConsumeMessages(serviceInstance)
 	}()
 
+	logInstance.InfoLogger.Info("Starting WebSocket server")
+	if err := http.ListenAndServe(cfg.WebSocket.Addr, nil); err != nil {
+		logInstance.ErrorLogger.Error("Failed to start server", "error", err)
+		os.Exit(1)
+	}
+
+	// Handle graceful shutdown
 	handleGracefulShutdown(rabbitmqConsumer, rabbitmqPublisher, wsServer, logInstance)
 }
 
