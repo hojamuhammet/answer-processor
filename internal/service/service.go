@@ -151,8 +151,22 @@ func (s *Service) processQuiz(clientID int64, message domain.SMSMessage, parsedD
 			s.WSServer.Broadcast(destination, msg)
 
 			s.LogInstance.InfoLogger.Info("Correct answer processed and broadcasted", "answer", correctAnswerMessage.Answer, "score", correctAnswerMessage.Score, "date", correctAnswerMessage.Date, "serial_number", correctAnswerMessage.SerialNumber, "serial_number_for_correct", correctAnswerMessage.SerialNumberForCorrect, "starred_src", correctAnswerMessage.StarredSrc, "quiz_id", correctAnswerMessage.QuizID, "question_id", correctAnswerMessage.QuestionID)
-		} else if !isCorrect || scoredMap[questionID] {
-			score = 0 // Do not award points for incorrect or subsequent correct answers
+		} else {
+			s.mu.Lock()
+			incorrectAnswerCount, err := repository.GetIncorrectAnswerCount(s.DB, questionID, clientID)
+			s.mu.Unlock()
+			if err != nil {
+				s.LogInstance.ErrorLogger.Error("Failed to get incorrect answer count", "error", err)
+				continue
+			}
+
+			if incorrectAnswerCount == 0 {
+				score = 0 // Record the first incorrect answer without score
+				s.LogInstance.InfoLogger.Info("First incorrect answer recorded", "question_id", questionID, "client_id", clientID)
+			} else {
+				s.LogInstance.InfoLogger.Info("Repeated incorrect answer ignored", "question_id", questionID, "client_id", clientID)
+				continue
+			}
 		}
 
 		s.mu.Lock()

@@ -173,3 +173,12 @@ func HasClientScoredBatch(db *sql.DB, questionIDs []int64, clientID int64) (map[
 	}
 	return scoredMap, nil
 }
+
+func GetIncorrectAnswerCount(db *sql.DB, questionID, clientID int64) (int, error) {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM answers WHERE question_id = ? AND client_id = ? AND score = 0", questionID, clientID).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
